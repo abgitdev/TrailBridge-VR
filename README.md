@@ -67,6 +67,17 @@ on [BasaltVR](https://github.com/frenchbaguetteman/BasaltVR).
 - **10 languages**: English, Russian, Ukrainian, German, Spanish, French, Italian, Polish,
   Japanese and Korean. English and Russian are reviewed; the others are machine translations.
 
+## Screenshots
+
+<p align="center">
+  <img src=".github/assets/screenshot-library.png" width="49%" alt="Library: add a game from Steam or from a folder">
+  <img src=".github/assets/screenshot-steam.png" width="49%" alt="Steam: sign in inside Steam's own window">
+</p>
+<p align="center">
+  <img src=".github/assets/screenshot-stream.png" width="49%" alt="Stream: settings for the next launch and live session statistics">
+  <img src=".github/assets/screenshot-settings.png" width="49%" alt="Settings: connection, quality presets and game audio">
+</p>
+
 ## Tested setup
 
 | | |

@@ -5,17 +5,22 @@ import XCTest
 /// The Setup checks a packaged app adds: Rosetta, and the Wine it can
 /// download itself.
 final class SetupInspectorTests: XCTestCase {
-    func testRosettaIsInstalledWhenItsServiceIsThere() throws {
-        let folder = try temporaryDirectory()
-        let service = folder.appendingPathComponent("Library/Apple/usr/libexec/oahd")
-        XCTAssertFalse(Rosetta.isInstalled(servicePath: service.path))
-        try FileManager.default.createDirectory(
-            at: service.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try Data().write(to: service)
-        XCTAssertTrue(Rosetta.isInstalled(servicePath: service.path))
-        XCTAssertEqual(Rosetta.servicePath, "/Library/Apple/usr/libexec/oahd")
+    func testRosettaIsWhetherTheMacRunsIntelCode() {
+        XCTAssertTrue(Rosetta.isInstalled(runsIntelCode: { true }))
+        XCTAssertFalse(Rosetta.isInstalled(runsIntelCode: { false }))
         XCTAssertEqual(Rosetta.installCommand, "softwareupdate --install-rosetta --agree-to-license")
         XCTAssertFalse(Rosetta.installCommand.contains("sudo"))
+    }
+
+    /// The real check gives the same answer as `arch -x86_64` in a shell,
+    /// wherever this macOS keeps Rosetta.
+    func testTheRealCheckAgreesWithArch() throws {
+        let shell = Process()
+        shell.executableURL = URL(fileURLWithPath: "/bin/sh")
+        shell.arguments = ["-c", "arch -x86_64 /usr/bin/true >/dev/null 2>&1"]
+        try shell.run()
+        shell.waitUntilExit()
+        XCTAssertEqual(Rosetta.runsIntelCode(), shell.terminationStatus == 0)
     }
 
     func testRosettaCheckComesRightAfterTheMacCheck() throws {

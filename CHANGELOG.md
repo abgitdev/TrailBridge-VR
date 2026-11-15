@@ -2,7 +2,13 @@
 
 All notable changes to TrailBridge VR are documented here.
 
-## 0.2.0 — unreleased
+## 0.2.1 — 2026-11-15
+
+- Setup recognises Rosetta 2 on every macOS version: the check now runs Intel code, as
+  `arch -x86_64` does, instead of looking for a file that newer macOS versions keep elsewhere.
+- The README shows screenshots of the app.
+
+## 0.2.0 — 2026-11-15
 
 The first public version of TrailBridge VR. It is built on BasaltVR: its 0.1.0 release and the
 later changes on BasaltVR's main branch.

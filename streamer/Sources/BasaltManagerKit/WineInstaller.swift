@@ -409,13 +409,28 @@ final class StreamedDownload: NSObject, URLSessionDataDelegate, @unchecked Senda
 
 /// Rosetta 2, which runs the Intel code of Wine and of Windows games.
 public enum Rosetta {
-    /// Rosetta's own service; macOS has it only once Rosetta is installed.
-    public static let servicePath = "/Library/Apple/usr/libexec/oahd"
     /// What installs it, for the person to run in Terminal.
     public static let installCommand = "softwareupdate --install-rosetta --agree-to-license"
 
-    public static func isInstalled(servicePath: String = servicePath,
-                                   fileManager: FileManager = .default) -> Bool {
-        fileManager.fileExists(atPath: servicePath)
+    /// Whether this Mac runs Intel code. macOS keeps Rosetta's files in
+    /// different places in different versions, so the check runs a tiny
+    /// Intel program, as `arch -x86_64` does in Terminal, instead of
+    /// looking for a file.
+    public static func isInstalled(runsIntelCode: () -> Bool = runsIntelCode) -> Bool {
+        runsIntelCode()
+    }
+
+    /// `/usr/bin/arch -x86_64 /usr/bin/true`: without Rosetta it fails at
+    /// once, with no window.
+    public static func runsIntelCode() -> Bool {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/arch")
+        process.arguments = ["-x86_64", "/usr/bin/true"]
+        process.standardInput = FileHandle.nullDevice
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        do { try process.run() } catch { return false }
+        process.waitUntilExit()
+        return process.terminationStatus == 0
     }
 }
