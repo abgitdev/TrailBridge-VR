@@ -4,6 +4,28 @@ import BasaltBottleKit
 import BasaltCore
 
 final class ManagementModelsTests: XCTestCase {
+    func testVideoCodecSettingsAreBackwardCompatibleAndOptInPerProfile() throws {
+        let legacy = Data(#"{"fps":72,"megabits":80,"resolution":"quality"}"#.utf8)
+        var settings = try JSONDecoder().decode(StreamLaunchSettings.self, from: legacy)
+        XCTAssertEqual(settings.codec, .h264)
+        settings.gameAudioChoice = .off
+        let baselineArguments = settings.arguments
+        XCTAssertFalse(baselineArguments.contains("--codec"))
+        settings.codec = .hevc
+        XCTAssertEqual(settings.arguments, baselineArguments + ["--codec", "hevc"])
+        XCTAssertEqual(try StreamerOptions.parse(settings.arguments)?.codec, .hevc)
+        XCTAssertEqual(try JSONDecoder().decode(StreamLaunchSettings.self,
+            from: JSONEncoder().encode(settings)), settings)
+        let profiles = ["one": settings, "two": StreamLaunchSettings()]
+        XCTAssertEqual(try JSONDecoder().decode([String: StreamLaunchSettings].self,
+            from: JSONEncoder().encode(profiles)), profiles)
+        settings.selectQuality(.balanced)
+        XCTAssertEqual(settings.codec, .hevc)
+        XCTAssertEqual(StreamLaunchSettings().codec, .h264)
+        XCTAssertThrowsError(try JSONDecoder().decode(StreamLaunchSettings.self,
+            from: Data(#"{"codec":"av1"}"#.utf8)))
+    }
+
     func testSteamConnectionLogUsesLatestStateAfterSnapshot() {
         let old = "[2026-01-01] [Logged On, 4, 7] ready\n"
         let coldStart = "[2026-01-02] [Logged Off, 0, 0] starting\n"
@@ -60,6 +82,72 @@ final class ManagementModelsTests: XCTestCase {
 
         XCTAssertEqual(games.count, 1)
         XCTAssertEqual(games[0].profileName, profile.name)
+    }
+
+    func testTwoBottlesWithOneNameDoNotStopDetection() throws {
+        let temporary = try temporaryDirectory()
+        let first = makeBottle(
+            name: "main", prefix: temporary.appendingPathComponent("first/prefix", isDirectory: true))
+        let second = makeBottle(
+            name: "main", prefix: temporary.appendingPathComponent("second/prefix", isDirectory: true))
+        let profile = LaunchProfile(
+            name: "game", bottleName: "main", source: .direct, executable: #"C:\Games\game.exe"#)
+
+        let games = GameDetector().detect(bottles: [first, second], profiles: [profile])
+
+        XCTAssertEqual(games.map(\.profileName), ["game"])
+        XCTAssertEqual(games.first?.hostExecutable?.path,
+                       first.prefixPath + "/drive_c/Games/game.exe")
+    }
+
+    func testStoredTitleNamesTheTileAndOlderProfilesKeepTheirNames() throws {
+        let temporary = try temporaryDirectory()
+        let bottles = ["brutalistick-vr", "blood-trail", "beat-saber", "folder-games"].map {
+            makeBottle(name: $0, prefix: temporary.appendingPathComponent("\($0)/prefix", isDirectory: true))
+        }
+        let common = #"C:\Program Files (x86)\Steam\steamapps\common\"#
+        let profiles = [
+            // The two working games' profiles have no title.
+            LaunchProfile(
+                name: "brutalistick-vr-steam", bottleName: "brutalistick-vr", source: .steam,
+                executable: common + #"BrutalistickVR\BrutalistickVR.exe"#,
+                environment: ["SteamAppId": "2669380", "SteamGameId": "2669380"],
+                gameRoot: common + "BrutalistickVR"),
+            LaunchProfile(
+                name: "blood-trail-blood-trail", bottleName: "blood-trail", source: .steam,
+                executable: common + #"Blood Trail\BTVR\Binaries\Win64\BTVR-Win64-Shipping.exe"#,
+                environment: ["SteamAppId": "1032430", "SteamGameId": "1032430"],
+                gameRoot: common + "Blood Trail"),
+            LaunchProfile(
+                name: "beat-saber-steam", bottleName: "beat-saber", source: .steam,
+                executable: common + #"Beat Saber\Beat Saber.exe"#),
+            // Games added from a folder carry the title the user typed.
+            LaunchProfile(
+                name: "hello-xr", bottleName: "folder-games", source: .direct,
+                executable: #"C:\Games\hello-xr\khr_hello_xr_d3d11.exe"#,
+                gameRoot: #"C:\Games\hello-xr"#, title: "  hello_xr  "),
+            LaunchProfile(
+                name: "beat-saber-folder", bottleName: "folder-games", source: .direct,
+                executable: #"C:\Games\Beat Saber\Beat Saber.exe"#, title: "Beat Saber 1.45"),
+            // A blank title falls back to the executable's name.
+            LaunchProfile(
+                name: "blank", bottleName: "folder-games", source: .direct,
+                executable: #"C:\Games\Tool\Tool.exe"#, title: " \n "),
+        ]
+
+        let games = GameDetector().detect(bottles: bottles, profiles: profiles)
+        let titles = Dictionary(uniqueKeysWithValues: games.compactMap { game in
+            game.profileName.map { ($0, game.title) }
+        })
+        XCTAssertEqual(titles, [
+            "brutalistick-vr-steam": "BrutalistickVR",
+            "blood-trail-blood-trail": "BTVR-Win64-Shipping",
+            "beat-saber-steam": "Beat Saber",
+            "hello-xr": "hello_xr",
+            "beat-saber-folder": "Beat Saber 1.45",
+            "blank": "Tool",
+        ])
+        XCTAssertEqual(games.count, profiles.count)
     }
 
     func testWindowsPathsMapBackIntoBottle() {
@@ -175,10 +263,10 @@ final class ManagementModelsTests: XCTestCase {
         settings.megabits = 18
         settings.resolution = .quality
         settings.latency = .ultra
-        settings.audioDeviceName = "BlackHole 2ch"
+        settings.gameAudioChoice = .device("BlackHole 2ch")
         XCTAssertEqual(settings.arguments, [
             "--wired", "--fps", "80", "--mbps", "18",
-            "--resolution", "quality", "--latency", "ultra",
+            "--resolution", "quality", "--latency", "low", "--low-latency-rc", "on",
             "--audio-device", "BlackHole 2ch", "--route-audio",
         ])
         settings.connection = .wifi
@@ -199,12 +287,145 @@ final class ManagementModelsTests: XCTestCase {
         XCTAssertNil(StreamLogMetricsParser.parse(line: "tracking ready", date: date))
     }
 
+    func testAppSessionsDoNotOpenTheRawStreamPort() throws {
+        // Nothing in the app reads the streamer's TCP port for ffplay, and an
+        // open port is one more thing a local process can lean on.
+        var settings = StreamLaunchSettings()
+        for connection in StreamConnectionMode.allCases {
+            settings.connection = connection
+            let arguments = settings.arguments
+                + ["--runtime", "/fixture/runtime.control", "--trust-file", "/fixture/trust.json"]
+            XCTAssertFalse(arguments.contains("--port"))
+            XCTAssertFalse(arguments.contains("--bind"))
+            XCTAssertEqual(try StreamerOptions.parse(arguments)?.opensDebugStream, false,
+                           connection.rawValue)
+        }
+    }
+
+    func testHeadsetFiltersAreOptInAndSettingsRemainBackwardCompatible() throws {
+        let defaults = StreamLaunchSettings()
+        XCTAssertEqual(defaults.arguments, [
+            "--wired", "--fps", "72", "--mbps", "30", "--resolution", "quality", "--latency", "low",
+            "--low-latency-rc", "on", "--game-audio", "mac",
+        ])
+        let legacy = Data(#"{"connection":"wifi","fps":90,"megabits":80,"resolution":"balanced","latency":"ultra","audioDeviceName":"Test"}"#.utf8)
+        let decoded = try JSONDecoder().decode(StreamLaunchSettings.self, from: legacy)
+        XCTAssertEqual(decoded.questSupersampling, .off)
+        XCTAssertEqual(decoded.questSharpening, .off)
+        XCTAssertEqual(decoded.fps, 90)
+        XCTAssertEqual(decoded.connection, .wifi)
+        XCTAssertEqual(decoded.megabits, 80)
+        // Only "BlackHole 2ch" was ever picked automatically; this one stays.
+        XCTAssertEqual(decoded.gameAudioChoice, .device("Test"))
+        XCTAssertEqual(decoded.resolution, .balanced)
+        XCTAssertEqual(decoded.latency, .low)
+        XCTAssertEqual(try JSONDecoder().decode(StreamLaunchSettings.self, from: Data("{}".utf8)), defaults)
+        let dictionary = try JSONDecoder().decode([String: StreamLaunchSettings].self,
+            from: Data("{\"game\":\(String(decoding: legacy, as: UTF8.self))}".utf8))
+        XCTAssertEqual(dictionary["game"], decoded)
+        var quiet = defaults
+        quiet.gameAudioChoice = .off
+        for level in HeadsetFilterLevel.allCases {
+            var settings = quiet
+            settings.questSupersampling = level
+            settings.questSharpening = level
+            settings.resolution = .maximum
+            XCTAssertEqual(try JSONDecoder().decode(StreamLaunchSettings.self,
+                from: JSONEncoder().encode(settings)), settings)
+            if level != .off {
+                XCTAssertEqual(Array(settings.arguments.suffix(4)), [
+                    "--quest-supersampling", level.rawValue, "--quest-sharpening", level.rawValue,
+                ])
+            } else {
+                XCTAssertFalse(settings.arguments.contains("--quest-supersampling"))
+                XCTAssertFalse(settings.arguments.contains("--quest-sharpening"))
+            }
+            // 1680x1760 at 72 Hz: more than low-latency rate control keeps up with.
+            let rateControl = try XCTUnwrap(settings.arguments.firstIndex(of: "--low-latency-rc"))
+            XCTAssertEqual(settings.arguments[rateControl + 1], "off")
+        }
+        var oneFilter = quiet
+        oneFilter.questSharpening = .normal
+        XCTAssertEqual(Array(oneFilter.arguments.suffix(2)), ["--quest-sharpening", "normal"])
+    }
+
+    func testOpenCompositeOfficialURLsAndArtifactMetadata() {
+        XCTAssertEqual(OpenCompositeDownload.officialURL(for: .x64).absoluteString,
+            "https://znix.xyz/OpenComposite/download.php?arch=x64&branch=openxr")
+        XCTAssertEqual(OpenCompositeDownload.officialURL(for: .x86).absoluteString,
+            "https://znix.xyz/OpenComposite/download.php?arch=x86&branch=openxr")
+        let artifact = OpenCompositeArtifact(file: URL(fileURLWithPath: "/fixture/openvr_api.dll"), data: Data("abc".utf8))
+        XCTAssertEqual(artifact.size, 3)
+        XCTAssertEqual(artifact.sha256, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+    }
+
+    func testOpenCompositeIsPinnedToTheTestedBuilds() throws {
+        XCTAssertEqual(OpenCompositeDownload.testedSHA256[.x64],
+                       "827ad85f3606a4dc4a8f5561a8ca69e4c6c1b5d2b9cd3315a461b9270b08242c")
+        XCTAssertEqual(OpenCompositeDownload.testedSHA256[.x86],
+                       "096095dc592d606d7e085cc5780fac342d4a84174acb0d55a56f40b70e080a18")
+        XCTAssertFalse(OpenCompositeDownload.isTested(Data("abc".utf8), architecture: .x64))
+        let root = URL(fileURLWithPath: "/data", isDirectory: true)
+        XCTAssertEqual(OpenCompositeDownload.cacheFile(architecture: .x86, dataRoot: root).path,
+                       "/data/Downloads/OpenComposite/x86/openvr_api.dll")
+    }
+
     func testResolutionPresetsMatchTheStreamerParser() throws {
         for preset in ResolutionSelection.allCases {
             XCTAssertEqual(preset.perEyeResolution, try PerEyeResolution.parse(preset.rawValue))
         }
         XCTAssertEqual(ResolutionSelection.quality.dimensions, "1344 × 1408")
         XCTAssertEqual(ResolutionSelection.performance.label, "Performance · 896 × 944")
+        XCTAssertEqual(ResolutionSelection.high.label, "High · 1536 × 1600")
+        XCTAssertEqual(ResolutionSelection.maximum.label, "Maximum · 1680 × 1760")
+        XCTAssertEqual(ResolutionSelection.questNative.label, "Quest 3 native · 2064 × 2208")
+        XCTAssertEqual(ResolutionSelection.questNative150.label, "Quest 3 native ×1.5 · 3072 × 3280")
+        // Every choice is one the runtime accepts and recommends to the game.
+        for preset in ResolutionSelection.allCases {
+            XCTAssertLessThanOrEqual(preset.perEyeResolution.width, RuntimeLink.maximumViewWidth)
+            XCTAssertLessThanOrEqual(preset.perEyeResolution.height, RuntimeLink.maximumViewHeight)
+        }
+    }
+
+    /// "Auto" keeps low-latency rate control up to the stream size a Mac mini
+    /// M4 keeps up with and asks for more frames above that; the person's
+    /// own choice always wins.
+    func testTheEncoderModeFollowsTheStreamSizeUnlessChosen() throws {
+        func lowLatency(_ settings: StreamLaunchSettings) throws -> String {
+            let index = try XCTUnwrap(settings.arguments.firstIndex(of: "--low-latency-rc"))
+            return settings.arguments[index + 1]
+        }
+        var settings = StreamLaunchSettings()
+        settings.codec = .hevc
+        XCTAssertEqual(settings.encoderMode, .auto)
+        for (resolution, fps, expected) in [
+            (ResolutionSelection.quality, 72, "on"), (.quality, 90, "on"), (.quality, 120, "off"),
+            (.high, 72, "on"), (.high, 90, "off"), (.maximum, 72, "off"),
+            (.questNative, 72, "off"), (.performance, 120, "on"),
+        ] {
+            settings.resolution = resolution
+            settings.fps = fps
+            XCTAssertEqual(try lowLatency(settings), expected, "\(resolution.rawValue) at \(fps) Hz")
+        }
+        settings.resolution = .questNative150
+        settings.encoderMode = .lowLatency
+        XCTAssertEqual(try lowLatency(settings), "on")
+        settings.resolution = .performance
+        settings.fps = 72
+        settings.encoderMode = .moreFrames
+        XCTAssertEqual(try lowLatency(settings), "off")
+        XCTAssertEqual(try StreamerOptions.parse(settings.arguments)?.lowLatencyRateControl, false)
+
+        // Settings saved before the choice existed read as Auto; the choice is kept.
+        let legacy = try JSONDecoder().decode(StreamLaunchSettings.self, from: Data(#"{"fps":90}"#.utf8))
+        XCTAssertEqual(legacy.encoderMode, .auto)
+        let restored = try JSONDecoder().decode(
+            StreamLaunchSettings.self, from: try JSONEncoder().encode(settings))
+        XCTAssertEqual(restored.encoderMode, .moreFrames)
+        // Not a picture quality value: a preset stays selected.
+        settings.selectQuality(.quality)
+        settings.encoderMode = .lowLatency
+        XCTAssertEqual(settings.qualityPreset, .quality)
     }
 
     func testExtractsLastActionableStreamerError() {

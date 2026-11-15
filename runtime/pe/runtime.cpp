@@ -1,9 +1,13 @@
+// Declares XR_KHR_win32_convert_performance_counter_time in this file only.
+#define XR_USE_PLATFORM_WIN32
 #include "runtime.hpp"
+#include "frame_trace.hpp"
 
 #include <windows.h>
 
 #include <openxr/openxr_reflection.h>
 
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 
@@ -11,11 +15,14 @@ namespace {
 
 constexpr uintptr_t kFirstInstanceHandle = static_cast<uintptr_t>(0x10000);
 constexpr uintptr_t kInstanceHandleStride = static_cast<uintptr_t>(0x10);
+constexpr int64_t kNanosecondsPerSecond = 1'000'000'000;
 
 SRWLOCK gInstanceLock = SRWLOCK_INIT;
 uintptr_t gNextInstanceHandle = kFirstInstanceHandle;
 XrInstance gLiveInstance = XR_NULL_HANDLE;
 bool gD3D11ExtensionEnabled = false;
+bool gPerformanceCounterExtensionEnabled = false;
+bool gDisplayRefreshRateExtensionEnabled = false;
 
 XrResult XRAPI_CALL basaltEnumerateInstanceExtensionProperties(
     const char* layerName,
@@ -29,29 +36,51 @@ XrResult XRAPI_CALL basaltEnumerateInstanceExtensionProperties(
         return XR_ERROR_API_LAYER_NOT_PRESENT;
     }
 
-    const bool d3d11Available = basalt::isD3D11RuntimeAvailable();
-    *propertyCountOutput = d3d11Available ? 1 : 0;
+    // D3D11 only where DXMT supplies the device. Converting
+    // QueryPerformanceCounter values needs nothing else, and Unity's OpenXR
+    // plugin requires that extension on Windows: without it the loader
+    // refuses xrCreateInstance and the game falls back to the desktop.
+    // Valve's refresh-rate feature for Unity holds BONELAB on its loading
+    // splash until the display refresh rate extension answers.
+    struct Advertised {
+        const char* name;
+        uint32_t version;
+    };
+    Advertised advertised[3]{};
+    uint32_t count = 0;
+    if (basalt::isD3D11RuntimeAvailable()) {
+        advertised[count++] = {XR_KHR_D3D11_ENABLE_EXTENSION_NAME, XR_KHR_D3D11_enable_SPEC_VERSION};
+    }
+    advertised[count++] = {
+        XR_KHR_WIN32_CONVERT_PERFORMANCE_COUNTER_TIME_EXTENSION_NAME,
+        XR_KHR_win32_convert_performance_counter_time_SPEC_VERSION};
+    advertised[count++] = {
+        XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME,
+        XR_FB_display_refresh_rate_SPEC_VERSION};
+
+    *propertyCountOutput = count;
     if (propertyCapacityInput == 0) {
         return XR_SUCCESS;
     }
     if (properties == nullptr) {
         return XR_ERROR_VALIDATION_FAILURE;
     }
-    if (!d3d11Available) {
-        return XR_SUCCESS;
-    }
-    if (propertyCapacityInput < 1) {
+    if (propertyCapacityInput < count) {
         return XR_ERROR_SIZE_INSUFFICIENT;
     }
-    if (properties[0].type != XR_TYPE_EXTENSION_PROPERTIES) {
-        return XR_ERROR_VALIDATION_FAILURE;
+    for (uint32_t index = 0; index < count; ++index) {
+        if (properties[index].type != XR_TYPE_EXTENSION_PROPERTIES) {
+            return XR_ERROR_VALIDATION_FAILURE;
+        }
     }
-    std::strncpy(
-        properties[0].extensionName,
-        XR_KHR_D3D11_ENABLE_EXTENSION_NAME,
-        XR_MAX_EXTENSION_NAME_SIZE - 1);
-    properties[0].extensionName[XR_MAX_EXTENSION_NAME_SIZE - 1] = '\0';
-    properties[0].extensionVersion = XR_KHR_D3D11_enable_SPEC_VERSION;
+    for (uint32_t index = 0; index < count; ++index) {
+        std::strncpy(
+            properties[index].extensionName,
+            advertised[index].name,
+            XR_MAX_EXTENSION_NAME_SIZE - 1);
+        properties[index].extensionName[XR_MAX_EXTENSION_NAME_SIZE - 1] = '\0';
+        properties[index].extensionVersion = advertised[index].version;
+    }
     return XR_SUCCESS;
 }
 
@@ -104,11 +133,21 @@ XrResult XRAPI_CALL basaltCreateInstance(
         return XR_ERROR_API_VERSION_UNSUPPORTED;
     }
     bool enableD3D11 = false;
+    bool enablePerformanceCounter = false;
+    bool enableDisplayRefreshRate = false;
     for (uint32_t index = 0; index < createInfo->enabledExtensionCount; ++index) {
         const char* extensionName = createInfo->enabledExtensionNames[index];
         if (extensionName == nullptr) {
             std::fprintf(stderr, "Basalt OpenXR: null enabled extension name at index %u\n", index);
             return XR_ERROR_VALIDATION_FAILURE;
+        }
+        if (std::strcmp(extensionName, XR_KHR_WIN32_CONVERT_PERFORMANCE_COUNTER_TIME_EXTENSION_NAME) == 0) {
+            enablePerformanceCounter = true;
+            continue;
+        }
+        if (std::strcmp(extensionName, XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME) == 0) {
+            enableDisplayRefreshRate = true;
+            continue;
         }
         if (std::strcmp(extensionName, XR_KHR_D3D11_ENABLE_EXTENSION_NAME) != 0) {
             std::fprintf(stderr, "Basalt OpenXR: unsupported enabled extension '%s'\n", extensionName);
@@ -132,9 +171,12 @@ XrResult XRAPI_CALL basaltCreateInstance(
     }
     gLiveInstance = reinterpret_cast<XrInstance>(gNextInstanceHandle);
     gD3D11ExtensionEnabled = enableD3D11;
+    gPerformanceCounterExtensionEnabled = enablePerformanceCounter;
+    gDisplayRefreshRateExtensionEnabled = enableDisplayRefreshRate;
     gNextInstanceHandle += kInstanceHandleStride;
     *instance = gLiveInstance;
     ReleaseSRWLockExclusive(&gInstanceLock);
+    basalt::frameTraceStart();
     return XR_SUCCESS;
 }
 
@@ -150,10 +192,13 @@ XrResult XRAPI_CALL basaltDestroyInstance(XrInstance instance) {
     }
     gLiveInstance = XR_NULL_HANDLE;
     gD3D11ExtensionEnabled = false;
+    gPerformanceCounterExtensionEnabled = false;
+    gDisplayRefreshRateExtensionEnabled = false;
     ReleaseSRWLockExclusive(&gInstanceLock);
     basalt::invalidateSessionForInstance(instance);
     basalt::invalidateInputForInstance(instance);
     basalt::invalidatePathsForInstance(instance);
+    basalt::frameTraceStop();
     return XR_SUCCESS;
 }
 
@@ -239,6 +284,98 @@ XrResult XRAPI_CALL basaltGetInstanceProperties(
     return XR_SUCCESS;
 }
 
+bool isPerformanceCounterExtensionEnabled(XrInstance instance) {
+    if (instance == XR_NULL_HANDLE) {
+        return false;
+    }
+    AcquireSRWLockShared(&gInstanceLock);
+    const bool enabled = instance == gLiveInstance && gPerformanceCounterExtensionEnabled;
+    ReleaseSRWLockShared(&gInstanceLock);
+    return enabled;
+}
+
+// XR_KHR_win32_convert_performance_counter_time. The runtime's XrTime is the
+// QueryPerformanceCounter value in nanoseconds with no offset: frame.cpp,
+// input.cpp and control.cpp all scale the counter exactly this way. So a
+// converted counter lands on the same clock as xrWaitFrame's
+// predictedDisplayTime, and converting back inverts the same scaling.
+XrResult checkPerformanceCounterCall(XrInstance instance, const void* output, int64_t* frequency) {
+    if (!basalt::isValidInstance(instance)) {
+        return XR_ERROR_HANDLE_INVALID;
+    }
+    if (!isPerformanceCounterExtensionEnabled(instance)) {
+        return XR_ERROR_FUNCTION_UNSUPPORTED;
+    }
+    if (output == nullptr) {
+        return XR_ERROR_VALIDATION_FAILURE;
+    }
+    LARGE_INTEGER value{};
+    if (!QueryPerformanceFrequency(&value) || value.QuadPart <= 0) {
+        return XR_ERROR_RUNTIME_FAILURE;
+    }
+    *frequency = value.QuadPart;
+    return XR_SUCCESS;
+}
+
+XrResult XRAPI_CALL basaltConvertWin32PerformanceCounterToTime(
+    XrInstance instance,
+    const LARGE_INTEGER* performanceCounter,
+    XrTime* time) {
+    int64_t frequency = 0;
+    const XrResult check = checkPerformanceCounterCall(instance, time, &frequency);
+    if (check != XR_SUCCESS) {
+        return check;
+    }
+    if (performanceCounter == nullptr) {
+        return XR_ERROR_VALIDATION_FAILURE;
+    }
+    const int64_t counter = performanceCounter->QuadPart;
+    if (counter <= 0) {
+        return XR_ERROR_TIME_INVALID;
+    }
+    const int64_t seconds = counter / frequency;
+    const int64_t remainder = counter % frequency;
+    // remainder < frequency, so the product fits for any counter frequency
+    // up to 9.2 GHz, the same bound the runtime clock itself relies on.
+    if (seconds > INT64_MAX / kNanosecondsPerSecond ||
+        remainder > INT64_MAX / kNanosecondsPerSecond) {
+        return XR_ERROR_TIME_INVALID;
+    }
+    const int64_t whole = seconds * kNanosecondsPerSecond;
+    const int64_t fraction = (remainder * kNanosecondsPerSecond) / frequency;
+    if (whole > INT64_MAX - fraction || whole + fraction <= 0) {
+        return XR_ERROR_TIME_INVALID;
+    }
+    *time = static_cast<XrTime>(whole + fraction);
+    return XR_SUCCESS;
+}
+
+XrResult XRAPI_CALL basaltConvertTimeToWin32PerformanceCounter(
+    XrInstance instance,
+    XrTime time,
+    LARGE_INTEGER* performanceCounter) {
+    int64_t frequency = 0;
+    const XrResult check = checkPerformanceCounterCall(instance, performanceCounter, &frequency);
+    if (check != XR_SUCCESS) {
+        return check;
+    }
+    if (time <= 0) {
+        return XR_ERROR_TIME_INVALID;
+    }
+    const int64_t seconds = time / kNanosecondsPerSecond;
+    const int64_t nanoseconds = time % kNanosecondsPerSecond;
+    if (seconds > INT64_MAX / frequency || frequency > INT64_MAX / kNanosecondsPerSecond) {
+        return XR_ERROR_TIME_INVALID;
+    }
+    const int64_t whole = seconds * frequency;
+    const int64_t fraction = (nanoseconds * frequency) / kNanosecondsPerSecond;
+    if (whole > INT64_MAX - fraction) {
+        return XR_ERROR_TIME_INVALID;
+    }
+    performanceCounter->QuadPart = static_cast<LONGLONG>(whole + fraction);
+    return XR_SUCCESS;
+}
+
 template <typename Function>
 PFN_xrVoidFunction asVoidFunction(Function function) {
     return reinterpret_cast<PFN_xrVoidFunction>(function);
@@ -264,6 +401,16 @@ bool isD3D11ExtensionEnabled(XrInstance instance) {
     }
     AcquireSRWLockShared(&gInstanceLock);
     const bool enabled = instance == gLiveInstance && gD3D11ExtensionEnabled;
+    ReleaseSRWLockShared(&gInstanceLock);
+    return enabled;
+}
+
+bool isDisplayRefreshRateExtensionEnabled(XrInstance instance) {
+    if (instance == XR_NULL_HANDLE) {
+        return false;
+    }
+    AcquireSRWLockShared(&gInstanceLock);
+    const bool enabled = instance == gLiveInstance && gDisplayRefreshRateExtensionEnabled;
     ReleaseSRWLockShared(&gInstanceLock);
     return enabled;
 }
@@ -355,6 +502,21 @@ XrResult XRAPI_CALL getInstanceProcAddr(
     } else if (std::strcmp(name, "xrGetD3D11GraphicsRequirementsKHR") == 0 &&
                isD3D11ExtensionEnabled(instance)) {
         *function = asVoidFunction(getD3D11GraphicsRequirements);
+    } else if (std::strcmp(name, "xrConvertWin32PerformanceCounterToTimeKHR") == 0 &&
+               isPerformanceCounterExtensionEnabled(instance)) {
+        *function = asVoidFunction(basaltConvertWin32PerformanceCounterToTime);
+    } else if (std::strcmp(name, "xrConvertTimeToWin32PerformanceCounterKHR") == 0 &&
+               isPerformanceCounterExtensionEnabled(instance)) {
+        *function = asVoidFunction(basaltConvertTimeToWin32PerformanceCounter);
+    } else if (std::strcmp(name, "xrEnumerateDisplayRefreshRatesFB") == 0 &&
+               isDisplayRefreshRateExtensionEnabled(instance)) {
+        *function = asVoidFunction(enumerateDisplayRefreshRates);
+    } else if (std::strcmp(name, "xrGetDisplayRefreshRateFB") == 0 &&
+               isDisplayRefreshRateExtensionEnabled(instance)) {
+        *function = asVoidFunction(getDisplayRefreshRate);
+    } else if (std::strcmp(name, "xrRequestDisplayRefreshRateFB") == 0 &&
+               isDisplayRefreshRateExtensionEnabled(instance)) {
+        *function = asVoidFunction(requestDisplayRefreshRate);
     } else if (std::strcmp(name, "xrCreateSession") == 0) {
         *function = asVoidFunction(createSession);
     } else if (std::strcmp(name, "xrDestroySession") == 0) {

@@ -1,0 +1,157 @@
+Work around an Apple GPU compiler crash on discard-only predecessors.
+
+MTLCompilerService (AGX backend) crashes in PHINode::removeIncomingValue when a
+block with PHI nodes has only predecessors that discard the fragment. Two DXBC
+discards with opposite conditions optimize into that shape. The crash also fails
+every other pipeline being compiled at that moment in that process. The discard
+does not have to be the last instruction of the predecessor.
+
+Sink the discards into the merge block: every incoming path has just discarded,
+and nothing with a side effect runs between the discard and the branch, so one
+discard at the start of the merge block is equivalent. Repeat until no block has
+the shape, because the moved discard can complete it for a later merge block.
+Shaders without this shape are untouched.
+diff --git a/src/airconv/airconv_context.cpp b/src/airconv/airconv_context.cpp
+index ffa2596..d6864ba 100644
+--- a/src/airconv/airconv_context.cpp
++++ b/src/airconv/airconv_context.cpp
+@@ -31,6 +31,7 @@
+ #include "air_tessellation.h"
+ 
+ #include "transforms/lower_16bit_texread.hpp"
++#include "transforms/sink_discard_into_merge.hpp"
+ #include "transforms/simdgroup_implicit_membarrier.hpp"
+ 
+ using namespace llvm;
+@@ -145,6 +146,7 @@ runOptimizationPasses(llvm::Module &M) {
+ 
+     GlobalCleanupPM.addPass(air::Lower16BitTexReadPass());
+     GlobalCleanupPM.addPass(air::SimdgroupImplicitMemBarrierPass());
++    GlobalCleanupPM.addPass(air::SinkDiscardIntoMergePass());
+ 
+     MPM.addPass(createModuleToFunctionPassAdaptor(std::move(GlobalCleanupPM), true /* ? */));
+   }
+diff --git a/src/airconv/meson.build b/src/airconv/meson.build
+index f5d877a..fd489c2 100644
+--- a/src/airconv/meson.build
++++ b/src/airconv/meson.build
+@@ -15,6 +15,7 @@ airconv_src = files([
+  'nt/dxbc_converter_base.cpp',
+  'transforms/lower_16bit_texread.cpp',
+  'transforms/simdgroup_implicit_membarrier.cpp',
++ 'transforms/sink_discard_into_merge.cpp',
+ ])
+ 
+ airconv_cli_src = files(['airconv_cli.cpp'])
+diff --git b/src/airconv/transforms/sink_discard_into_merge.cpp b/src/airconv/transforms/sink_discard_into_merge.cpp
+new file mode 100644
+index 0000000..02dc332
+--- /dev/null
++++ b/src/airconv/transforms/sink_discard_into_merge.cpp
+@@ -0,0 +1,91 @@
++#include "sink_discard_into_merge.hpp"
++#include "llvm/ADT/STLExtras.h"
++#include "llvm/ADT/SmallVector.h"
++#include "llvm/IR/BasicBlock.h"
++#include "llvm/IR/CFG.h"
++#include "llvm/IR/Function.h"
++#include "llvm/IR/Instructions.h"
++
++using namespace llvm;
++
++namespace llvm::air {
++
++static bool
++isDiscard(const Instruction &I) {
++  auto *Call = dyn_cast<CallInst>(&I);
++  if (!Call)
++    return false;
++  auto *Callee = Call->getCalledFunction();
++  return Callee && Callee->getName() == "air.discard_fragment";
++}
++
++// Appends the discards of Pred that one discard at the start of Merge can
++// replace. Pred must branch only to Merge, and nothing after a discard may have
++// a side effect: then running the discard a few instructions later changes
++// nothing observable. Returns false, leaving Out as it was, when Pred has no
++// discard or has one that has to stay where it is.
++static bool
++sinkableDiscards(BasicBlock *Pred, BasicBlock *Merge, SmallVectorImpl<CallInst *> &Out) {
++  auto *Branch = dyn_cast<BranchInst>(Pred->getTerminator());
++  if (!Branch || Branch->isConditional() || Pred == Merge)
++    return false;
++  const size_t Before = Out.size();
++  bool InPureTail = true;
++  for (Instruction &I : reverse(*Pred)) {
++    if (I.isTerminator())
++      continue;
++    if (isDiscard(I)) {
++      if (!InPureTail) {
++        Out.truncate(Before);
++        return false;
++      }
++      Out.push_back(cast<CallInst>(&I));
++    } else if (InPureTail && I.mayHaveSideEffects()) {
++      InPureTail = false;
++    }
++  }
++  return Out.size() > Before;
++}
++
++// Apple's GPU compiler (MTLCompilerService, AGX backend) crashes in
++// PHINode::removeIncomingValue on a block with PHI nodes when every predecessor
++// discards the fragment. Two DXBC discards with opposite conditions optimize
++// into that shape, and the crash also fails every other pipeline that the
++// service is compiling at that moment. The discard does not have to be the last
++// instruction of the predecessor for the crash to happen.
++//
++// Every path into such a block has just discarded, so one discard at the start
++// of the block is equivalent and leaves none in the predecessors. The moved
++// discard can give a later merge block the same shape, hence the fixpoint; each
++// round removes at least one discard, so it terminates.
++PreservedAnalyses
++SinkDiscardIntoMergePass::run(Function &F, FunctionAnalysisManager &AM) {
++  bool Changed = false;
++  bool Progress = true;
++  while (Progress) {
++    Progress = false;
++    for (BasicBlock &Merge : F) {
++      if (!isa<PHINode>(Merge.front()))
++        continue;
++      SmallVector<CallInst *, 4> Discards;
++      unsigned Preds = 0;
++      bool AllDiscard = true;
++      for (BasicBlock *Pred : predecessors(&Merge)) {
++        ++Preds;
++        if (!sinkableDiscards(Pred, &Merge, Discards)) {
++          AllDiscard = false;
++          break;
++        }
++      }
++      if (!AllDiscard || Preds < 2)
++        continue;
++      Discards.front()->moveBefore(&*Merge.getFirstInsertionPt());
++      for (CallInst *Duplicate : drop_begin(Discards))
++        Duplicate->eraseFromParent();
++      Progress = Changed = true;
++    }
++  }
++  return Changed ? PreservedAnalyses::none() : PreservedAnalyses::all();
++}
++
++} // namespace llvm::air
+diff --git b/src/airconv/transforms/sink_discard_into_merge.hpp b/src/airconv/transforms/sink_discard_into_merge.hpp
+new file mode 100644
+index 0000000..bba3e9a
+--- /dev/null
++++ b/src/airconv/transforms/sink_discard_into_merge.hpp
+@@ -0,0 +1,9 @@
++#pragma once
++#include "llvm/IR/PassManager.h"
++
++namespace llvm::air {
++class SinkDiscardIntoMergePass : public PassInfoMixin<SinkDiscardIntoMergePass> {
++public:
++  PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
++};
++} // namespace llvm::air

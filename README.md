@@ -1,158 +1,195 @@
-# BasaltVR
+<p align="center">
+  <img src=".github/assets/banner.webp" alt="TrailBridge VR: Windows PC VR games on your Mac" width="100%">
+</p>
 
-**A clean-room, open-source PCVR streaming stack for Apple Silicon Macs.** BasaltVR runs Windows
-VR games under Wine and streams them to a Quest headset over ALVR.
+<p align="center">
+  <a href="https://github.com/abgitdev/TrailBridge-VR/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/abgitdev/TrailBridge-VR?label=release&labelColor=1b1b1f&color=ff5a1f"></a>
+  <a href="https://github.com/abgitdev/TrailBridge-VR/releases"><img alt="Downloads" src="https://img.shields.io/github/downloads/abgitdev/TrailBridge-VR/total?label=downloads&labelColor=1b1b1f&color=ff7a1a"></a>
+  <a href="https://github.com/abgitdev/TrailBridge-VR/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/abgitdev/TrailBridge-VR/ci.yml?branch=main&label=CI&labelColor=1b1b1f"></a>
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-2ea44f?labelColor=1b1b1f"></a>
+  <img alt="Free, no subscriptions" src="https://img.shields.io/badge/price-free%2C%20no%20subscriptions-2ea44f?labelColor=1b1b1f">
+</p>
+<p align="center">
+  <img alt="macOS 14 or newer" src="https://img.shields.io/badge/macOS-14%2B-d1d1d6?logo=apple&logoColor=white&labelColor=1b1b1f">
+  <img alt="Apple Silicon" src="https://img.shields.io/badge/Apple%20Silicon-arm64-d1d1d6?labelColor=1b1b1f">
+  <img alt="Meta Quest 3: tested" src="https://img.shields.io/badge/Meta%20Quest%203-tested-0081fb?logo=meta&logoColor=white&labelColor=1b1b1f">
+  <img alt="USB and Wi-Fi" src="https://img.shields.io/badge/stream-USB%20%7C%20Wi--Fi-8957e5?labelColor=1b1b1f">
+  <img alt="10 languages" src="https://img.shields.io/badge/languages-10-8957e5?labelColor=1b1b1f">
+</p>
+<p align="center">
+  <a href="#tested-setup"><img alt="Verified games: 5" src="https://img.shields.io/badge/verified%20games-5-ff5a1f?logo=steam&logoColor=white&labelColor=1b1b1f"></a>
+  <img alt="OpenXR runtime" src="https://img.shields.io/badge/OpenXR-runtime-6e7681?labelColor=1b1b1f">
+  <img alt="Wine 11.10" src="https://img.shields.io/badge/Wine-11.10-6e7681?labelColor=1b1b1f">
+  <img alt="DXMT 0.80 fork" src="https://img.shields.io/badge/DXMT-0.80%20fork-6e7681?labelColor=1b1b1f">
+  <img alt="ALVR client 20.14.1" src="https://img.shields.io/badge/ALVR%20client-20.14.1-6e7681?labelColor=1b1b1f">
+  <a href="CONTRIBUTING.md"><img alt="Pull requests welcome" src="https://img.shields.io/badge/PRs-welcome-2ea44f?labelColor=1b1b1f"></a>
+</p>
 
-[![CI](https://github.com/frenchbaguetteman/BasaltVR/actions/workflows/ci.yml/badge.svg)](https://github.com/frenchbaguetteman/BasaltVR/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/frenchbaguetteman/BasaltVR?include_prereleases&label=preview)](https://github.com/frenchbaguetteman/BasaltVR/releases)
-![Platform](https://img.shields.io/badge/platform-macOS%2014%2B%20%C2%B7%20Apple%20Silicon-lightgrey)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+<h3 align="center">Play Windows PC VR games on an Apple Silicon Mac with a Meta Quest headset.</h3>
 
-*(Basalt is what molten rock becomes when it cools down and solidifies in the open.)*
+<p align="center">
+  <a href="https://github.com/abgitdev/TrailBridge-VR/releases/latest"><b>Download the DMG</b></a> ·
+  <a href="#install">Install</a> ·
+  <a href="#tested-setup">Tested setup</a> ·
+  <a href="#build-from-source">Build from source</a> ·
+  <a href="CONTRIBUTING.md">Contribute</a>
+</p>
+
+TrailBridge VR runs Windows VR games under Wine on your Mac and streams them to the headset
+over a USB cable or Wi‑Fi. A patched DXMT translates Direct3D 11 to Metal, the project's own
+OpenXR runtime talks to the game, and a native macOS streamer sends the picture to the ALVR
+client on the headset. The app is free and open source, with no subscriptions, and it is built
+on [BasaltVR](https://github.com/frenchbaguetteman/BasaltVR).
 
 > [!WARNING]
-> BasaltVR is an experimental developer preview. Its OpenXR runtime is not conformant or
-> game-ready in the general case. Beat Saber is the narrow compatibility target, and setup still
-> requires developer tooling. Do not treat milestone passes as a broad compatibility guarantee.
+> TrailBridge VR is experimental. It was tested on one Mac with one headset (see
+> [Tested setup](#tested-setup)); other Macs, headsets and games may not work. The app is not
+> signed by Apple.
 
-**Tested with:** Steam Beat Saber and BSManager on an M3 Max, streaming to a Quest 3 with ALVR.
+## Features
+
+- **Add Steam Game**: creates a Wine environment, installs the official Steam client, waits for
+  Steam's downloads and updates, and adds the game to the Library. When Steam hangs, the app
+  restarts it.
+- **Add Game from Folder**: copies a Windows game from a folder on any disk into its own
+  environment and leaves the folder unchanged.
+- **OpenVR and OpenXR games**: OpenVR games run through OpenComposite, which the app downloads on
+  request; OpenXR games run directly.
+- **Picture quality**: presets from Performance to Maximum with a recommendation for your Mac,
+  HEVC or H.264, per-eye sizes up to 3072 × 3280, and 72, 90 or 120 Hz.
+- **USB or Wi‑Fi**: reconnect the headset without restarting the game; over Wi‑Fi the bitrate
+  follows the network.
+- **Game audio** from the Mac itself (macOS 14.2 or newer) or through BlackHole.
+- **Guided setup**: a Learning guide from a new Mac to the first game, and a Setup page that
+  downloads Wine, the ALVR client and Android platform tools with checksums.
+- **Clean removal**: one button deletes everything the app stored on the Mac.
+- **10 languages**: English, Russian, Ukrainian, German, Spanish, French, Italian, Polish,
+  Japanese and Korean. English and Russian are reviewed; the others are machine translations.
+
+## Tested setup
+
+| | |
+|---|---|
+| Mac | Mac mini M4 with 32 GB of memory, macOS 27 |
+| Headset | Meta Quest 3, 512 GB, ALVR client 20.14.1 |
+| Connection | USB cable and Wi‑Fi |
+| Games | Bought on Steam and installed through the official Steam client, and added from a game folder without Steam |
+
+| Game | Runs through | Notes |
+|---|---|---|
+| BRUTALISTICK VR | OpenComposite (OpenVR) | |
+| Blood Trail | OpenComposite (OpenVR) | Walking direction follows the controller setting; running is not available on controllers. |
+| VTOL VR | OpenComposite (OpenVR) | TrailBridge VR switches the game to one render pass per eye; without it the right eye stays black. |
+| BONELAB | The game's own OpenXR | |
+| Blade & Sorcery | OpenComposite (OpenVR) | |
+
+Not tested: Macs with 8 GB or 16 GB of memory, other Mac models and other headsets. TrailBridge
+VR does not promise stable operation on them. Other games may work but are not verified.
+
+## Install
+
+1. Download `TrailBridge-VR-<version>-macos-arm64.dmg` from
+   [Releases](https://github.com/abgitdev/TrailBridge-VR/releases/latest). Each release lists
+   the file's SHA-256 and a VirusTotal report.
+2. Optionally check the file: `shasum -a 256 ~/Downloads/TrailBridge-VR-*.dmg` must print the
+   published SHA-256.
+3. Open the DMG and drag **TrailBridge VR** to **Applications**.
+4. Open the app. It is not signed by Apple, so macOS blocks the first start: open
+   **System Settings › Privacy & Security**, click **Open Anyway** next to TrailBridge VR and
+   confirm. This is needed once.
+5. If the Mac has no Rosetta 2 yet, run this in Terminal:
+
+   ```sh
+   softwareupdate --install-rosetta --agree-to-license
+   ```
+
+6. Follow **Learning** in the app. Choose the data folder (this Mac, an external disk or network
+   storage) before the app downloads Wine 11.10 (about 190 MB) and your games.
+
+## Requirements
+
+- A Mac with Apple Silicon and macOS 14 or newer, with Rosetta 2. Intel Macs are not supported.
+- A Meta Quest headset in developer mode. Only the Quest 3 is tested.
+- Your own Steam account and games you bought, or Windows VR games you own in a folder.
+- Free space on the disk with the data folder: about 720 MB for Wine, plus Steam and the games.
+
+Known limits: the OpenXR runtime is not conformant; per-eye sizes above 1680 × 1760 need a
+strong Mac and a light game; Steam under Wine sometimes freezes (use **Restart Steam** on the
+Steam page); the headset's microphone is not passed to the Mac.
 
 ## How it works
 
 ```
-Windows VR game ──► [OpenComposite] ──► Basalt OpenXR runtime ──► DXMT        (inside Wine)
- (D3D11, PE)         OpenVR games only    (Windows DLL)             (D3D11→Metal)
-                                             │                        │
-                              control socket │                        │ IOSurface per eye
-                                             ▼                        ▼
-                     basalt-streamer:  Metal stereo compose ──► VideoToolbox H.264   (native macOS)
-                                             │
+Windows VR game ──► [OpenComposite] ──► OpenXR runtime ──► DXMT fork        (inside Wine)
+ (D3D11, PE)         OpenVR games only   (Windows DLL)      (D3D11 → Metal)
+                                             │                    │
+                              control socket │                    │ IOSurface per eye
+                                             ▼                    ▼
+                     basalt-streamer:  Metal stereo compose ──► VideoToolbox HEVC/H.264
+                                             │                              (native macOS)
                                              ▼
                      ALVR transport (USB or Wi-Fi) ──► Quest headset
-                     ◄── head/controller tracking, buttons, haptics, stats ──
+                     ◄── head/controller tracking, buttons, haptics, statistics ──
 ```
 
-BasaltVR reuses Wine, [DXMT](https://github.com/3Shain/dxmt),
-[OpenComposite](https://gitlab.com/znixian/OpenOVR), and [ALVR](https://github.com/alvr-org/ALVR),
-and builds the parts that were missing in the open: a Wine-facing OpenXR runtime, zero-copy Metal
-composition and hardware encoding, the ALVR streamer bridge, isolated Wine bottle tooling, and a
-SwiftUI manager that hides the setup behind a launch profile.
-
-The project was developed clean-room from public behavior and open-source interfaces; no MoltenVR
-source code was used. BasaltVR is independent and is not affiliated with or endorsed by MoltenVR,
-Meta, Valve, Beat Games, or the upstream projects it interoperates with.
-
-## Status
-
-The first complete experience is intentionally narrow: launch a modded Windows build of
-**Beat Saber** on an Apple Silicon Mac and play it on an ALVR headset with a few clicks. General
-PCVR support comes after that vertical path works reliably.
-
-| Milestone | Description | Status |
-|-----------|-------------|--------|
-| **M1** | Display capture → VideoToolbox H.264 (low-latency) → TCP stream | ✅ working |
-| **M2** | ALVR transport bridge — stream to a real headset running the ALVR client | ✅ stable 72 fps over USB on Quest 3 |
-| **M3** | OpenXR runtime: Windows PE ABI + native Metal compositor | ✅ D3D11 projection frames cross DXMT/IOSurface into the Swift streamer and reach the headset at 72 fps |
-| **M4** | Tracking, controllers & haptics (ALVR input ↔ OpenXR actions) | ✅ automated HMD/Touch actions, spaces, velocity, loss/recovery, profiles, priority, and haptics pass; pinned Khronos `hello_xr` completes the external-app session path, and the live Quest gate is physically verified at 72 fps |
-| **M5** | Wine bottle tooling: isolated DXMT engine, OpenXR registration, OpenComposite, launch profiles | ✅ CLI complete; disposable managed-bottle acceptance passes |
-| **M6** | Audio (BlackHole) + USB streaming (adb) | ✅ 48 kHz stereo PCM reaches Quest over wired ALVR; live gate holds 1.536 Mbps with zero audio drops and audible headset output |
-| **M7** | Management app: setup wizard, Steam/Whisky/CrossOver library, launcher | 🟨 preview packaging works; Developer ID/notarization and clean-user live acceptance remain |
-
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full design and what each milestone
-involves, and [ROADMAP.md](ROADMAP.md) for the remaining consumer-release gates.
-
-## Download
-
-Download the latest Apple Silicon developer preview from
-[GitHub Releases](../../releases). Each release includes a SHA-256 checksum and exact
-limitations. The app requires macOS 14 or newer and is currently ad-hoc signed rather than
-notarized.
-
-Verify a downloaded archive before opening it:
-
-```sh
-shasum -a 256 -c BasaltVR-0.1.0-macos-arm64.zip.sha256
-```
-
-Extract the ZIP, move `BasaltVR.app` to Applications if desired, and use **Open** from Finder's
-context menu on first launch. The app's **Setup** page reports missing runtime, Wine, ADB, and
-optional audio prerequisites. This preview is intended for technical users; it is not yet a
-turnkey installer.
-
-For a complete setup, read the [management app guide](docs/MANAGEMENT.md) and
-[bottle guide](docs/BOTTLES.md). The preview archive deliberately does not redistribute Wine,
-ALVR, OpenComposite, BlackHole, games, or store credentials.
-
-## The management app
-
-The native SwiftUI app wraps the bottle and streaming tools. It checks the Mac and dependencies;
-discovers Basalt, Whisky, and CrossOver bottles; reads installed Steam libraries and local artwork;
-creates and edits launch profiles; owns streamer, Steam, installer, and game processes; and graphs
-live Quest FPS, wire bitrate, and input-to-display latency.
-
-The app writes only to Basalt's managed data root. External Whisky and CrossOver bottles are
-read-only until you explicitly make an isolated APFS-cloned Basalt copy.
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) describes the design in detail.
 
 ## Build from source
 
-Requires an Apple Silicon Mac with macOS 14+ and the Xcode command-line tools. The Windows runtime
-additionally needs `brew install cmake mingw-w64`.
+You need Xcode with the Metal toolchain, CMake, LLVM-MinGW, Meson and Ninja.
 
 ```sh
-make doctor          # check the local toolchain
-make check           # the same quality gate CI runs
-make app             # build everything and run the management app
+git clone https://github.com/abgitdev/TrailBridge-VR.git
+cd TrailBridge-VR
+./scripts/trailbridge-dev.zsh make doctor-dxmt        # check the tools
+./scripts/trailbridge-dev.zsh runtime/scripts/build-dxmt-fork.zsh
+./scripts/trailbridge-dev.zsh make dxmt-test          # pinned Wine, runtime and graphics tests
+./scripts/trailbridge-dev.zsh make check              # repository checks and Swift tests
+./scripts/trailbridge-app.zsh                         # builds .local/apps/TrailBridge VR.app
+./scripts/trailbridge-dev.zsh make release            # builds the DMG in .local/dist
 ```
 
-| Command | What it does |
-|---------|--------------|
-| `make test` | Run the deterministic Swift test suite |
-| `make runtime-build` | Cross-build the Windows OpenXR runtime DLL |
-| `make runtime-test` | Run the Wine loader and ABI smoke suite |
-| `make dxmt-test` | Run the pinned Wine 11.10 + DXMT graphics suite (needs Metal) |
-| `make release VERSION=X.Y.Z` | Build a local preview archive |
+Run every development command through `scripts/trailbridge-dev.zsh`: it keeps caches,
+temporary files and the app's data inside `.local/` in the checkout. The first DXMT build
+compiles LLVM and takes tens of minutes. `make help` lists all targets.
 
-Run `make help` for the full list, and see [CONTRIBUTING.md](CONTRIBUTING.md) before opening a
-pull request.
+| Document | Covers |
+|---|---|
+| [Management app](docs/MANAGEMENT.md) | The app's screens and workflow |
+| [Bottles and launch profiles](docs/BOTTLES.md) | `basaltctl`, environments, OpenComposite and launching games |
+| [Streamer](docs/STREAMER.md) | `basalt-streamer` over USB and Wi‑Fi, audio and stream settings |
+| [OpenXR runtime](runtime/README.md) | What the runtime implements and how it is tested |
+| [Architecture](docs/ARCHITECTURE.md) | System design and BasaltVR's milestone history |
+| [DXMT interop](docs/DXMT-INTEROP.md) | The D3D11 → Metal → IOSurface handoff and the DXMT fork |
 
-## Repository layout
+## Contributing
 
-| Path | Contents |
-|------|----------|
-| [`streamer/`](streamer) | Swift package: `basalt-streamer` (encode + ALVR transport), `basaltctl` (bottles and profiles), and the `BasaltVR` manager app |
-| [`runtime/`](runtime) | The Windows OpenXR runtime (C++, cross-built with MinGW), its Wine/DXMT test suites, and the Basalt DXMT fork patches |
-| [`packaging/`](packaging) | App bundle and release archive tooling |
-| [`scripts/`](scripts) | `doctor` and the `check` quality gate |
-| [`docs/`](docs) | Design notes and user guides |
+Bug reports, compatibility reports for games and pull requests are welcome. Read
+[CONTRIBUTING.md](CONTRIBUTING.md) and use the issue forms. Setup help: [SUPPORT.md](SUPPORT.md).
+Report security problems privately as described in [SECURITY.md](SECURITY.md). Leave out
+credentials, device serial numbers and home-folder paths; the app's diagnostic report removes
+them before you share it.
 
-## Documentation
+## Credits
 
-| Guide | Covers |
-|-------|--------|
-| [Management app](docs/MANAGEMENT.md) | Building, running, and the current GUI workflow |
-| [Bottles and launch profiles](docs/BOTTLES.md) | `basaltctl`, isolated engines, OpenComposite, and launching games |
-| [Streamer command line](docs/STREAMER.md) | `basalt-streamer` over USB and Wi-Fi, audio, stream settings, measurements, and security model |
-| [OpenXR runtime](runtime/README.md) | What the runtime implements, how to build it, and its Wine, DXMT, and headset tests |
-| [Architecture](docs/ARCHITECTURE.md) | System design, component map, and milestone history |
-| [DXMT interop](docs/DXMT-INTEROP.md) | The D3D11 → Metal → IOSurface frame handoff and the Basalt DXMT fork |
-| [Releasing](docs/RELEASING.md) and [maintaining](docs/MAINTAINING.md) | Preview releases, triage, and repository operations |
-
-## Why this exists
-
-MoltenVR is closed-source (binaries only, 7-day trial, license key via Patreon), yet most of
-its stack is open source. The genuinely novel work — the OpenXR runtime and the glue — is
-worth having in the open. That's this project.
-
-## Contributing and support
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for development and pull-request expectations,
-[SUPPORT.md](SUPPORT.md) for setup and compatibility-reporting help, and
-[SECURITY.md](SECURITY.md) for private vulnerability reporting. Changes are recorded in
-[CHANGELOG.md](CHANGELOG.md).
+- [BasaltVR](https://github.com/frenchbaguetteman/BasaltVR): the OpenXR runtime, the DXMT fork,
+  the streamer and the app that TrailBridge VR builds on.
+- [DXMT](https://github.com/3Shain/dxmt) by Feifan He: Direct3D 11 on Metal.
+- [Wine](https://www.winehq.org) and the [macOS Wine builds by Gcenx](https://github.com/Gcenx/macOS_Wine_builds).
+- [ALVR](https://github.com/alvr-org/ALVR): the headset client and its streaming protocol.
+- [OpenComposite](https://znix.xyz/OpenComposite/): OpenVR games on OpenXR.
+- [Khronos OpenXR SDK](https://github.com/KhronosGroup/OpenXR-SDK) and
+  [LLVM-MinGW](https://github.com/mstorsjo/llvm-mingw).
 
 ## License
 
-BasaltVR code is available under the [MIT License](LICENSE). Components it orchestrates keep their
-own licenses (ALVR: MIT; pinned DXMT v0.80: MIT; OpenComposite: GPLv3 — shipped as a separate
-artifact, never linked in). See [third-party notices](THIRD_PARTY_NOTICES.md) for the distribution
-boundary.
+TrailBridge VR is released under the [MIT License](LICENSE), like BasaltVR, whose copyright
+notice the license keeps. Components that the app contains or downloads keep their own licenses:
+see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and [LICENSES](LICENSES). TrailBridge VR
+does not include, download or unlock games, and it never asks for store credentials. It is an
+independent project, not affiliated with or endorsed by the BasaltVR authors, Apple, Meta, Valve
+or the game developers; their names are trademarks of their owners.
+
+<p align="center">
+  <a href="https://ko-fi.com/abgitdev"><img alt="Ko-fi" src="https://img.shields.io/badge/Ko--fi-abgitdev-ff5e5b?logo=ko-fi&logoColor=white&labelColor=1b1b1f"></a>
+</p>

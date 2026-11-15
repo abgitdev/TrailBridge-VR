@@ -1,4 +1,6 @@
 import CoreVideo
+import IOSurface
+import Metal
 import XCTest
 @testable import BasaltCore
 
@@ -57,7 +59,10 @@ final class RuntimeStereoComposerTests: XCTestCase {
         let right = try pixelBuffer(b: 0, g: 255, r: 0, a: 0)
         let completed = expectation(description: "asynchronous Metal composition")
         let outputs = FrameStore()
-        XCTAssertTrue(composer.composeAsync(left: left, right: right) { frame in
+        XCTAssertTrue(composer.composeAsync(
+            left: try XCTUnwrap(CVPixelBufferGetIOSurface(left)?.takeUnretainedValue()),
+            right: try XCTUnwrap(CVPixelBufferGetIOSurface(right)?.takeUnretainedValue())
+        ) { frame in
             outputs.append(frame)
             completed.fulfill()
         })
@@ -74,6 +79,55 @@ final class RuntimeStereoComposerTests: XCTestCase {
         XCTAssertGreaterThan(bytes[5], 240)
         XCTAssertLessThan(bytes[6], 15)
         XCTAssertGreaterThan(bytes[7], 240)
+    }
+
+    func testRGBAIOSurfacesComposeToBGRAWithoutColorConversion() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else {
+            throw XCTSkip("No Metal device")
+        }
+        let composer = try RuntimeStereoComposer(perEyeWidth: 1, height: 1)
+        let completed = expectation(description: "RGBA IOSurface composition")
+        let outputs = FrameStore()
+
+        func surface(r: UInt8, g: UInt8, b: UInt8, a: UInt8) throws -> IOSurfaceRef {
+            let bytesPerRow = IOSurfaceAlignProperty(kIOSurfaceBytesPerRow, 4)
+            let properties: [CFString: Any] = [
+                kIOSurfaceWidth: 1,
+                kIOSurfaceHeight: 1,
+                kIOSurfaceBytesPerElement: 4,
+                kIOSurfaceBytesPerRow: bytesPerRow,
+                kIOSurfacePixelFormat: kCVPixelFormatType_32RGBA,
+            ]
+            let surface = try XCTUnwrap(IOSurfaceCreate(properties as CFDictionary))
+            XCTAssertEqual(IOSurfaceLock(surface, [], nil), 0)
+            let bytes = try XCTUnwrap(IOSurfaceGetBaseAddress(surface))
+                .assumingMemoryBound(to: UInt8.self)
+            bytes[0] = r
+            bytes[1] = g
+            bytes[2] = b
+            bytes[3] = a
+            XCTAssertEqual(IOSurfaceUnlock(surface, [], nil), 0)
+            return surface
+        }
+
+        // Drop the caller's source references before waiting for GPU completion.
+        try autoreleasepool {
+            let left = try surface(r: 32, g: 96, b: 160, a: 0)
+            let right = try surface(r: 210, g: 70, b: 15, a: 17)
+            XCTAssertTrue(composer.composeAsync(left: left, right: right) { frame in
+                outputs.append(frame)
+                completed.fulfill()
+            })
+        }
+        wait(for: [completed], timeout: 2)
+        let output = try XCTUnwrap(outputs.first()?.pixelBuffer)
+        XCTAssertEqual(CVPixelBufferGetPixelFormatType(output), kCVPixelFormatType_32BGRA)
+        XCTAssertEqual(CVPixelBufferLockBaseAddress(output, .readOnly), kCVReturnSuccess)
+        defer { CVPixelBufferUnlockBaseAddress(output, .readOnly) }
+        let bytes = try XCTUnwrap(CVPixelBufferGetBaseAddress(output))
+            .assumingMemoryBound(to: UInt8.self)
+        XCTAssertEqual(Array(UnsafeBufferPointer(start: bytes, count: 8)),
+                       [160, 96, 32, 255, 15, 70, 210, 255])
     }
 
     func testEyeRectsCropASharedSideBySideImage() throws {

@@ -17,8 +17,8 @@ concurrency:
 jobs:
   quality:
     name: Repository and Swift quality
-    runs-on: macos-15
-    timeout-minutes: 20
+    runs-on: macos-26
+    timeout-minutes: 30
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -31,15 +31,33 @@ jobs:
 
   runtime:
     name: OpenXR cross-build
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 30
+    env:
+      CMAKE_DIST: cmake-3.31.8-macos-universal
+      LLVM_MINGW: llvm-mingw-20261104-ucrt-macos-universal
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Install cross-build prerequisites
-        run: brew install cmake mingw-w64
+      # The same pinned CMake and LLVM-MinGW the release DMG is built with.
+      - name: Install the pinned cross-build toolchain
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP"
+          curl -fsSLo cmake.tar.gz \
+            "https://github.com/Kitware/CMake/releases/download/v3.31.8/${CMAKE_DIST}.tar.gz"
+          echo "d1449f969c54d5c00886d5b643340d493dfb3c81cb39ee29b35453395c11ebf7  cmake.tar.gz" |
+            shasum -a 256 -c -
+          curl -fsSLo llvm-mingw.tar.xz \
+            "https://github.com/mstorsjo/llvm-mingw/releases/download/20261104/${LLVM_MINGW}.tar.xz"
+          echo "66cbd5178c4a71b0d473e68ede172f8eb7d15d023e67f39201d0a69e21f6bf3c  llvm-mingw.tar.xz" |
+            shasum -a 256 -c -
+          tar -xzf cmake.tar.gz
+          tar -xJf llvm-mingw.tar.xz
+          echo "$RUNNER_TEMP/${CMAKE_DIST}/CMake.app/Contents/bin" >> "$GITHUB_PATH"
+          echo "$RUNNER_TEMP/${LLVM_MINGW}/bin" >> "$GITHUB_PATH"
       - name: Verify cross-build environment
         run: make doctor-runtime
       - name: Configure runtime

@@ -57,4 +57,18 @@ inline XrPosef poseInvert(const XrPosef& pose) {
     return {conjugate, {-rotated.x, -rotated.y, -rotated.z}};
 }
 
+// A base space at basePose in LOCAL moves with LOCAL when a recenter changes
+// LOCAL-from-Quest. Returns new-base-from-previous-base, so composing it on
+// the left re-expresses a pose stored relative to the previous base:
+// inverse(B) * L * inverse(L_previous) * B.
+inline XrPosef baseFromPreviousBase(
+    const XrPosef& basePose,
+    const XrPosef& previousLocalFromQuest,
+    const XrPosef& localFromQuest) {
+    const XrPosef localFromPreviousLocal =
+        poseCompose(localFromQuest, poseInvert(previousLocalFromQuest));
+    return poseCompose(
+        poseInvert(basePose), poseCompose(localFromPreviousLocal, basePose));
+}
+
 }  // namespace basalt

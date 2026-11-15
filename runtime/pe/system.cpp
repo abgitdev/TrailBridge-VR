@@ -184,9 +184,9 @@ XrResult XRAPI_CALL enumerateViewConfigurationViews(
             return XR_ERROR_VALIDATION_FAILURE;
         }
     }
-    // The streamer's configured per-eye size, else the full headset size.
-    uint32_t recommendedWidth = kMaxViewWidth;
-    uint32_t recommendedHeight = kMaxViewHeight;
+    // The streamer's configured per-eye size, else the default one.
+    uint32_t recommendedWidth = kDefaultViewWidth;
+    uint32_t recommendedHeight = kDefaultViewHeight;
     controlConfiguredViewSize(&recommendedWidth, &recommendedHeight);
     for (uint32_t index = 0; index < kViewCount; ++index) {
         views[index].recommendedImageRectWidth = recommendedWidth;

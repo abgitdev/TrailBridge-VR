@@ -3,6 +3,69 @@ import XCTest
 
 @MainActor
 final class SessionConsoleTests: XCTestCase {
+    func testDeviceErrorFinalPartialLineIsCountedAndSourceCanBeReused() {
+        let console = SessionConsole()
+        let game = NSObject()
+        let source = ObjectIdentifier(game)
+        let error = "err:   Device error at frame 1: page fault"
+        _ = console.append(error + "\n" + error, from: source, prefix: "game: ")
+        XCTAssertEqual(console.finish(source, prefix: "game: "), [
+            "game: err:   Device error: suppressed 1 repeated command buffer failures",
+            "game: err:   Device error: suppressed 1 repeated command buffer failures (total)",
+        ])
+        XCTAssertTrue(console.finish(source, prefix: "game: ").isEmpty)
+        XCTAssertEqual(console.append(error + "\n", from: source, prefix: "game: "),
+                       ["game: " + error])
+    }
+
+    func testDeviceErrorFloodKeepsCompilerFailureAndFirstGPUError() {
+        let console = SessionConsole()
+        let game = NSObject()
+        let source = ObjectIdentifier(game)
+        _ = console.append("err:   Failed to create PSO: compiler interrupted\n", from: source, prefix: "game: ")
+        _ = console.append("err:   Device error at fra", from: source, prefix: "game: ")
+        _ = console.append("me 42: page fault\r\n", from: source, prefix: "game: ")
+        for frame in 43..<10_043 {
+            _ = console.append("err:   Device error at frame \(frame): submissions ignored\n",
+                               from: source, prefix: "game: ")
+        }
+        XCTAssertTrue(console.log.hasPrefix("game: err:   Failed to create PSO:"))
+        XCTAssertTrue(console.log.contains("game: err:   Device error at frame 42: page fault\n"))
+        XCTAssertFalse(console.log.contains("submissions ignored"))
+        XCTAssertLessThan(console.log.utf8.count, 3_000)
+        XCTAssertEqual(console.finish(source, prefix: "game: "),
+                       ["game: err:   Device error: suppressed 10000 repeated command buffer failures (total)"])
+    }
+
+    func testDeviceErrorSuppressionIsPerSourceAndResetsForNewSession() {
+        let console = SessionConsole()
+        let first = NSObject(), second = NSObject()
+        let error = "err:   Device error at frame 1: page fault\n"
+        _ = console.append(error + error, from: ObjectIdentifier(first), prefix: "game: ")
+        XCTAssertEqual(console.append(error, from: ObjectIdentifier(second), prefix: "other: "),
+                       ["other: " + error.trimmingCharacters(in: .newlines)])
+        // Other error families and ordinary text must remain untouched.
+        XCTAssertEqual(console.append("err:   Failed to create compute PSO\nDevice error at frame 2\n"),
+                       ["err:   Failed to create compute PSO", "Device error at frame 2"])
+        console.restart()
+        XCTAssertEqual(console.append(error, from: ObjectIdentifier(first)),
+                       [error.trimmingCharacters(in: .newlines)])
+    }
+
+    func testReconnectStatusParsesCompleteStreamerLinesAndClears() {
+        let console = SessionConsole()
+        _ = console.append("Headset disconnected; waiting for it to recon")
+        XCTAssertFalse(console.headsetDisconnected)
+        _ = console.append("nect…\n")
+        XCTAssertTrue(console.headsetDisconnected)
+        _ = console.append("Headset reconnected\n", prefix: "game: ")
+        XCTAssertTrue(console.headsetDisconnected)
+        _ = console.append("Headset reconnected\n")
+        XCTAssertFalse(console.headsetDisconnected)
+        _ = console.append("Headset disconnected; waiting for it to reconnect…\n")
+        console.restart()
+        XCTAssertFalse(console.headsetDisconnected)
+    }
     func testReturnsLinesCompletedAcrossChunks() {
         let console = SessionConsole()
         XCTAssertEqual(console.append("Quest 72"), [])

@@ -7,9 +7,10 @@ test. The OpenXR SDK is pinned to release 1.1.61 commit
 
 The current checkpoint implements strict loader/runtime negotiation, zero-API-layer enumeration,
 instance creation/destruction, instance properties, bounded live-handle registries, HMD system
-discovery, primary-stereo view discovery, and a runtime JSON manifest. Its current fixed prototype
-view size is 1680×1760 per eye. It advertises orientation/position tracking capability; location
-flags become tracked only while a fresh ALVR HMD pose is available.
+discovery, primary-stereo view discovery, and a runtime JSON manifest. It recommends the per-eye
+view size the streamer configures (even, 256 to 4096 pixels per side), else 1680×1760. It
+advertises orientation/position tracking capability; location flags become tracked only while a
+fresh ALVR HMD pose is available.
 
 It now conditionally advertises `XR_KHR_D3D11_enable` after an in-process capability gate proves
 feature level 11.0 plus D3D11 NT-handle create, reopen, GPU copy, and readback. In that environment
@@ -63,8 +64,7 @@ D3D11 application now also completes a live Quest transport/session run, includi
 eye swapchains, Touch action localization, rendering, and clean `STOPPING→IDLE→EXITING` teardown;
 the companion live Quest scene is physically confirmed with fused, level/world-fixed stereo,
 tracked controller response, analog squeeze, and haptics at 72 fps.
-The runtime remains non-conformant and not game-ready because broader application compatibility
-and game setup are unfinished.
+The runtime is not OpenXR-conformant.
 
 Milestone 5's supported persistent installation path is `basaltctl bottle prepare`. It clones the
 pinned engine into a Basalt-managed bottle, overlays DXMT there, copies this runtime to
@@ -78,8 +78,10 @@ below or any shared Whisky/GPTK/CrossOver engine. See [the bottle guide](../docs
 brew install cmake mingw-w64
 ```
 
-WhiskyWine is expected at Whisky's normal per-user library path for the non-graphics smoke.
-Override it with `WINE` if needed.
+Run without the project wrapper, the non-graphics smoke expects WhiskyWine at Whisky's normal
+per-user library path. Under `scripts/trailbridge-dev.zsh` it instead extracts, without the
+DXMT overlay, the pinned Wine 11.10 archive that `test-dxmt.zsh` downloads and verifies, into
+`runtime/build/wine-smoke`; run the DXMT suite once first. Override either choice with `WINE`.
 
 ## Build and test
 
@@ -93,7 +95,7 @@ The script:
 
 1. Cross-builds the runtime and smoke programs as x86-64 Windows PE binaries.
 2. Verifies that the DLL exports only `xrNegotiateLoaderRuntimeInterface`.
-3. Runs invalid and valid negotiation plus direct instance-lifecycle checks under WhiskyWine.
+3. Runs invalid and valid negotiation plus direct instance-lifecycle checks under Wine.
 4. Registers the manifest under the Khronos HKLM key in an isolated generated Wine prefix.
 5. Creates a BasaltVR instance and queries its HMD, stereo views, and opaque blend mode through
    the official Khronos Windows loader before destroying it, then exercises path atoms, action
@@ -101,8 +103,10 @@ The script:
    interaction profiles (including cross-profile/wrong-user rejection), and the to-string calls —
    everything available without a session.
 
-The isolated prefix is `runtime/build/wineprefix` by default. The script intentionally ignores
-an ambient `WINEPREFIX` so it cannot silently change a game bottle. Override `BUILD_DIR`,
+The isolated prefix is `runtime/build/wineprefix` by default, or
+`.local/wine-tests/wine-smoke/prefix` under the project wrapper (see
+[Test prefixes](#test-prefixes)). The script intentionally ignores an ambient `WINEPREFIX` so it
+cannot silently change a game bottle. Override `BUILD_DIR`,
 `BASALT_WINEPREFIX`, `WINE`, `CMAKE`, or `OBJDUMP` when needed. Do not point
 `BASALT_WINEPREFIX` at a game bottle unless you intend to change that bottle's active OpenXR
 runtime.
@@ -134,9 +138,11 @@ projection-layer submission (accept, quad acceptance/validation, limit/rect/neve
 rejection), FIFO swapchain wait/release order, and two independent three-image D3D11 swapchains.
 It also creates and submits a two-slice texture-array swapchain (Unity's Single Pass Instanced
 shape), whose slices the runtime copies into per-eye IOSurface exports. It does not modify `/Applications`,
-Whisky, CrossOver, or a game bottle. Rosetta 2 is required on Apple Silicon. Override the
-generated prefix only with
-`BASALT_DXMT_WINEPREFIX`; never point that variable at a game bottle.
+Whisky, CrossOver, or a game bottle. Rosetta 2 is required on Apple Silicon. The generated
+prefix is `runtime/build/dxmt/prefix-wine-11.10-dxmt-v0.80`, or
+`.local/wine-tests/dxmt-wine-11.10-dxmt-v0.80/prefix` under the project wrapper; the two headset
+scripts below share it. Override it only with `BASALT_DXMT_WINEPREFIX`; never point that variable
+at a game bottle (see [Test prefixes](#test-prefixes)).
 
 For the visible end-to-end graphics test, connect an authorized Quest over USB, open its ALVR
 client, stop any existing streamer, and run:
@@ -196,9 +202,36 @@ known pattern into a gated texture through the immediate context, waits an
 maps that IOSurface by ID and must read the exact bytes. The tree is restored to the
 pinned stock overlay afterwards, including when a fork-phase step fails.
 
-## Next implementation boundary
+### Test prefixes
 
-The next app-facing and graphics slices are:
+Unless told otherwise, Wine links a new prefix's Windows user folders (Desktop, Documents,
+Downloads, Music, Pictures, Videos) to the same folders in the Mac home directory. `test-wine.zsh`,
+`test-dxmt.zsh` and both headset scripts source `runtime/scripts/wine-sandbox.zsh`, which does for
+their prefix what the app does for managed bottles: per-prefix `XDG_CACHE_HOME`,
+`XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_STATE_HOME` and `TMPDIR`, an XDG `user-dirs.dirs` that
+names per-prefix host folders, and `winemenubuilder` disabled. A prefix directory named `prefix`
+keeps these in its sibling `host/` (the managed-bottle layout); any other prefix uses
+`<prefix>-host/`. Wine's server socket under `/tmp` and the system Metal shader cache stay outside
+the scripts' control.
+
+Before Wine starts, and again once Wine has created the prefix, the scripts refuse a prefix whose
+user-folder links point outside the repository and outside its own host folders, and print each
+offending link. They never rewrite or delete such a prefix: point the override variable at a new
+prefix, remove the disposable prefix yourself, or set `BASALT_ALLOW_EXTERNAL_USER_FOLDERS=1` to
+use it anyway.
+
+`scripts/trailbridge-dev.zsh` exports `BASALT_REPO_ROOT`; when it matches the checkout, the
+default prefixes move to `.local/wine-tests/<name>/prefix`. The wrapper deliberately clears
+`WINEPREFIX`, `BASALT_WINEPREFIX` and `BASALT_DXMT_WINEPREFIX` inherited from the calling shell, so
+pass an explicit override after it, for example:
+
+```sh
+./scripts/trailbridge-dev.zsh env BASALT_DXMT_WINEPREFIX="$PWD/.local/wine-tests/other/prefix" make dxmt-test
+```
+
+## Implementation history
+
+The app-facing and graphics slices, in order:
 
 1. ~~Implement the DXMT texture-export fork~~ Done: `v0.80-basalt.1` builds reproducibly,
    the fork phase of `test-dxmt.zsh` gates it, and the cross-process zero-copy pixel proof
@@ -223,8 +256,7 @@ The next app-facing and graphics slices are:
    selected per-eye stream dimensions so applications render at the target resolution instead
    of rendering 1680×1760 and immediately downscaling it.
    `runtime/scripts/test-headset.zsh` now runs that producer for a
-   visible interval and sends the resulting H.264 through the live wired ALVR path. Remaining:
-   the storage-mode frame-time comparison and a continuous real application/game producer.
+   visible interval and sends the resulting H.264 through the live wired ALVR path.
 3. ~~Feed live ALVR head poses into `xrLocateViews`/`xrLocateSpace`~~ Done: protocol v2 carries
    normalized ALVR HMD poses through a dedicated receive/demultiplex thread, with correct
    VIEW/LOCAL transforms, freshness, and tracked flags.
@@ -240,8 +272,9 @@ The next app-facing and graphics slices are:
    and core action-set priority shared by input, spaces, enumeration, and haptics. Grip action
    spaces work relative to LOCAL/VIEW and as `xrLocateViews` bases. ALVR has already predicted its
    corrected grip pose, so Basalt exposes the supplied linear/angular velocity without extrapolating
-   the pose a second time. Stock ALVR does not transmit its separately-polled aim pose, so aim
-   necessarily aliases grip until upstream provides distinct aim motion. The native daemon gates
+   the pose a second time. Stock ALVR transmits corrected grip motion, not its separately
+   created aim space. The runtime reconstructs an estimated Touch aim pose (see below).
+   The native daemon gates
    pose/velocity, immediate loss and recovery, a button change, profiles, priority, bound/localized
    sources, apply/stop haptics, and time-bounded LOCAL recentering from the Quest reset gesture.
    The pinned official Khronos `hello_xr` completes a live
@@ -251,6 +284,42 @@ The next app-facing and graphics slices are:
 
 Keeping the PE ABI side separate from the native compositor makes that platform boundary
 explicit and prevents placeholder swapchains from being mistaken for a playable runtime.
+
+### Touch controller poses
+
+Grip preserves ALVR 20.14.1's corrected grip convention. Its Quest 2/3 client sends native
+OpenXR grip composed with a local -15 degree X rotation and translation
+`(-0.005, -0.005, 0)` metres for the left hand (X mirrored for the right).
+It does not send the independently created aim space. See ALVR's
+[client pose conversion](https://github.com/alvr-org/ALVR/blob/v20.14.1/alvr/client_openxr/src/interaction.rs).
+
+Aim is reconstructed from OpenComposite's published Quest 2 `openxr_grip` and `tip` model
+transforms, removing ALVR's correction when converting between those frames. Relative to
+the received corrected grip this gives -43 degrees about local X and approximately
+`(0.014694, -0.025989, -0.073316)` metres (X mirrored for the right). These are an estimate
+for Quest 3 Touch Plus, not a specified or measured Meta calibration. The
+[OpenXR definitions](https://registry.khronos.org/OpenXR/specs/1.0/html/xrspec.html#semantic-paths-standard-pose-identifiers)
+define grip at the held hand and aim along the platform's pointing ray (-Z forward);
+they do not prescribe a numeric Touch transform. Model values come from
+[OpenComposite's Touch profile](https://gitlab.com/znixian/OpenOVR/-/blob/a27e7e6a64bdcd1eff6b7fba1ea2ea34bcf1273d/OpenOVR/Misc/Input/OculusInteractionProfile.cpp).
+Both `xrLocateSpace` (target and base) and `xrLocateViews` (action base) apply the chosen
+pose before the application's space offset. Velocity includes the offset origin's angular motion.
+
+For a per-game grip compatibility experiment, the runtime reads
+`BASALT_TOUCH_GRIP_PITCH_DEGREES` once at the first controller-space lookup. Default: **0**
+(off, preserving existing grip/raw poses). It accepts finite degrees from -180 through 180;
+missing or invalid values select 0. Positive values rotate grip's -Z toward local +Y.
+The rotation applies to both grips, leaves their origins and reconstructed aim unchanged,
+and precedes application offsets. Restart the game process after changing the value.
+
+OpenComposite's Touch `/pose/raw` uses its `legacy-left-grip-pose`/`legacy-right-grip-pose` actions
+and their identity-offset `gripPoseSpace` spaces,
+then multiplies by the inverse of its `openxr_grip` component transform. Its Touch `tip`
+is also a fixed profile transform. Separating OpenXR aim therefore does not change these
+OpenVR poses. Enabling the grip override does change them, including rendered hands;
+keep the variable confined to the game launch profile being tested, never shared globally.
+For an initial comparison, +15 degrees cancels ALVR's rotational correction only; it is
+a diagnostic value, not a proven locomotion fix. Remove the variable to roll back.
 
 ### DXMT feasibility gate
 

@@ -1,4 +1,8 @@
+#include <windows.h>
+
+#define XR_USE_PLATFORM_WIN32
 #include <openxr/openxr.h>
+#include <openxr/openxr_platform.h>
 
 #include <cstdlib>
 #include <cstdio>
@@ -8,6 +12,13 @@
 int main() {
     const bool expectD3D11 = [] {
         const char* value = std::getenv("BASALT_EXPECT_D3D11_EXTENSION");
+        return value != nullptr && std::strcmp(value, "1") == 0;
+    }();
+    // Required only where the caller knows the runtime is this build or newer
+    // (test-wine.zsh). Prepare runs this program from runtime/build/bin against
+    // the runtime a bottle has installed, which may be older after a rollback.
+    const bool expectCounterTime = [] {
+        const char* value = std::getenv("BASALT_EXPECT_COUNTER_TIME_EXTENSION");
         return value != nullptr && std::strcmp(value, "1") == 0;
     }();
     uint32_t extensionCount = UINT32_MAX;
@@ -32,9 +43,14 @@ int main() {
         return 1;
     }
     bool foundD3D11 = false;
+    bool foundCounterTime = false;
     for (const XrExtensionProperties& extension : extensions) {
         if (std::strcmp(extension.extensionName, "XR_KHR_D3D11_enable") == 0) {
             foundD3D11 = true;
+        }
+        if (std::strcmp(extension.extensionName,
+                        XR_KHR_WIN32_CONVERT_PERFORMANCE_COUNTER_TIME_EXTENSION_NAME) == 0) {
+            foundCounterTime = true;
         }
     }
     if (foundD3D11 != expectD3D11) {
@@ -44,9 +60,18 @@ int main() {
             expectD3D11 ? "advertised" : "hidden");
         return 1;
     }
+    // Unity's OpenXR plugin requests this one on Windows; without it the
+    // loader refuses xrCreateInstance and the game never reaches the headset.
+    if (expectCounterTime && !foundCounterTime) {
+        std::fputs("FAIL: XR_KHR_win32_convert_performance_counter_time is not advertised\n", stderr);
+        return 1;
+    }
 
+    const char* enabledExtensions[] = {XR_KHR_WIN32_CONVERT_PERFORMANCE_COUNTER_TIME_EXTENSION_NAME};
     XrInstanceCreateInfo createInfo{};
     createInfo.type = XR_TYPE_INSTANCE_CREATE_INFO;
+    createInfo.enabledExtensionCount = foundCounterTime ? 1 : 0;
+    createInfo.enabledExtensionNames = foundCounterTime ? enabledExtensions : nullptr;
     createInfo.applicationInfo.apiVersion = XR_API_VERSION_1_0;
     std::strncpy(createInfo.applicationInfo.applicationName, "Basalt loader smoke",
                  XR_MAX_APPLICATION_NAME_SIZE - 1);
@@ -66,6 +91,38 @@ int main() {
                      result, properties.runtimeName);
         xrDestroyInstance(instance);
         return 1;
+    }
+
+    // Where the runtime has it, the conversion reached through the loader
+    // turns a counter into the runtime clock and back.
+    if (foundCounterTime) {
+        PFN_xrVoidFunction toTimeVoid = nullptr;
+        PFN_xrVoidFunction toCounterVoid = nullptr;
+        LARGE_INTEGER counter{};
+        XrTime counterTime = 0;
+        LARGE_INTEGER back{};
+        result = xrGetInstanceProcAddr(instance, "xrConvertWin32PerformanceCounterToTimeKHR", &toTimeVoid);
+        if (result == XR_SUCCESS) {
+            result = xrGetInstanceProcAddr(
+                instance, "xrConvertTimeToWin32PerformanceCounterKHR", &toCounterVoid);
+        }
+        if (result == XR_SUCCESS && toTimeVoid != nullptr && toCounterVoid != nullptr &&
+            QueryPerformanceCounter(&counter)) {
+            result = reinterpret_cast<PFN_xrConvertWin32PerformanceCounterToTimeKHR>(toTimeVoid)(
+                instance, &counter, &counterTime);
+            if (result == XR_SUCCESS) {
+                result = reinterpret_cast<PFN_xrConvertTimeToWin32PerformanceCounterKHR>(toCounterVoid)(
+                    instance, counterTime, &back);
+            }
+        }
+        if (result != XR_SUCCESS || counterTime <= 0 || back.QuadPart > counter.QuadPart ||
+            counter.QuadPart - back.QuadPart > 1) {
+            std::fprintf(stderr, "FAIL: performance counter conversion returned %d (%lld -> %lld -> %lld)\n",
+                         result, static_cast<long long>(counter.QuadPart),
+                         static_cast<long long>(counterTime), static_cast<long long>(back.QuadPart));
+            xrDestroyInstance(instance);
+            return 1;
+        }
     }
 
     XrSystemGetInfo systemInfo{};

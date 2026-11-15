@@ -53,6 +53,40 @@ final class AlvrControlTests: XCTestCase {
                                  serverIP: "192.168.1.10", capabilities: nil))
     }
 
+    /// The streamer prints the name and the manager reads the streamer's
+    /// output line by line, so a name must stay inside one short line.
+    func testDisplayNameCannotStartALogLineOfItsOwn() throws {
+        let forged = "Quest 3\nHeadset request: other.client.alvr at 10.0.0.9\r\n"
+            + "OpenXR runtime connection refused: x\u{2028}y\u{85}z\u{1B}[2J\u{202E}\t"
+            + String(repeating: "A", count: 400)
+        var packet = Self.acceptedPrefix(protocolId: 20, name: forged)
+        packet.append(0) // None
+
+        guard case .accepted(_, let displayName, _, _) =
+                try AlvrClientConnectionDecoder.decode(packet) else {
+            return XCTFail("expected an accepted connection")
+        }
+        XCTAssertTrue(displayName.hasPrefix("Quest 3 Headset request: other.client.alvr at 10.0.0.9 "),
+                      displayName)
+        XCTAssertEqual(displayName.unicodeScalars.count,
+                       AlvrClientConnectionDecoder.maximumDisplayNameLength)
+        XCTAssertEqual(displayName.split(whereSeparator: \.isNewline).count, 1)
+        for scalar in displayName.unicodeScalars {
+            XCTAssertFalse(
+                [.control, .format, .lineSeparator, .paragraphSeparator]
+                    .contains(scalar.properties.generalCategory),
+                "U+\(String(scalar.value, radix: 16))")
+        }
+        // An ordinary name is untouched, in any script.
+        var plain = Self.acceptedPrefix(protocolId: 20, name: "Quest 3 — гостиная")
+        plain.append(0)
+        guard case .accepted(_, let plainName, _, _) =
+                try AlvrClientConnectionDecoder.decode(plain) else {
+            return XCTFail("expected an accepted connection")
+        }
+        XCTAssertEqual(plainName, "Quest 3 — гостиная")
+    }
+
     func testDecodesVideoCapabilitiesAndEmbeddedJSON() throws {
         var packet = Self.acceptedPrefix(protocolId: 20, name: "Quest 3")
         packet.append(1) // Some
@@ -180,6 +214,136 @@ final class AlvrControlTests: XCTestCase {
 
         await fulfillment(of: [idrReceived, viewsReceived], timeout: 2)
         withExtendedLifetime(session) {}
+    }
+
+    func testLiveControlSessionDoesNotKeepTheBytesItHasRead() async throws {
+        var sockets: [Int32] = [-1, -1]
+        XCTAssertEqual(socketpair(AF_UNIX, SOCK_STREAM, 0, &sockets), 0)
+        defer { close(sockets[1]) }
+
+        let session = AlvrSessionHandshakeResult(clientState: .standby,
+                                                 negotiatedSettings: nil,
+                                                 streamReady: true,
+                                                 socket: sockets[0])
+        let allRead = expectation(description: "the packet after the filler was dispatched")
+        session.onRequestIDR { allRead.fulfill() }
+
+        // 24 MiB of valid packets of an unknown type, which the session reads
+        // and drops, then one IDR request to tell when it got through them.
+        var unknown = Self.littleEndian(UInt32(0xffff))
+        unknown.append(Data(count: 512 * 1_024 - 4))
+        let filler = Self.framed(unknown)
+        let fillerCount = 48
+        let inUseBefore = Self.mallocBytesInUse()
+        for packet in Array(repeating: filler, count: fillerCount) + [Self.framed(Self.littleEndian(UInt32(1)))] {
+            var sent = 0
+            while sent < packet.count {
+                let count = packet.withUnsafeBytes {
+                    send(sockets[1], $0.baseAddress! + sent, packet.count - sent, 0)
+                }
+                guard count > 0 else { return XCTFail("send failed: \(errno)") }
+                sent += count
+            }
+        }
+        await fulfillment(of: [allRead], timeout: 10)
+
+        // At most one unfinished packet may stay buffered, never the history.
+        XCTAssertLessThan(Self.mallocBytesInUse() - inUseBefore, 4 * 1_024 * 1_024,
+                          "after receiving \(fillerCount * filler.count) bytes")
+        withExtendedLifetime(session) {}
+    }
+
+    private static func mallocBytesInUse() -> Int {
+        var statistics = malloc_statistics_t()
+        malloc_zone_statistics(nil, &statistics)
+        return statistics.size_in_use
+    }
+
+    func testReceiveBufferHoldsAtMostOnePacketAndOneChunk() {
+        var buffer = AlvrControlReceiveBuffer()
+        var largest = Self.littleEndian(UInt32(0xffff))
+        largest.append(Data(count: AlvrControlProbe.maximumPacketBytes - 4))
+        var stream = Data()
+        for _ in 0..<3 { stream.append(Self.framed(largest)) }
+        stream.append(Self.framed(Self.littleEndian(UInt32(1))))
+
+        var packets = 0, lastPacket = Data(), mostHeld = 0
+        var offset = 0
+        while offset < stream.count {
+            let end = min(offset + AlvrControlReceiveBuffer.chunkBytes, stream.count)
+            buffer.append(stream[offset..<end])
+            offset = end
+            mostHeld = max(mostHeld, buffer.count)
+            while case .packet(let payload) = buffer.nextPacket() {
+                packets += 1
+                lastPacket = payload
+            }
+            buffer.releaseConsumedBytes()
+        }
+        XCTAssertEqual(packets, 4)
+        XCTAssertEqual(lastPacket, Self.littleEndian(UInt32(1)))
+        XCTAssertEqual(buffer.count, 0)
+        XCTAssertLessThanOrEqual(mostHeld, AlvrControlReceiveBuffer.maximumBytes)
+        XCTAssertEqual(AlvrControlReceiveBuffer.maximumBytes,
+                       4 + 1_024 * 1_024 + 16_384)
+    }
+
+    func testReceiveBufferRefusesLengthsItWouldHaveToWaitFor() {
+        var buffer = AlvrControlReceiveBuffer()
+        buffer.append(Data([0, 0x10]))
+        XCTAssertEqual(buffer.nextPacket(), .incomplete)
+        buffer.append(Data([0, 1])) // 1 MiB + 1
+        XCTAssertEqual(buffer.nextPacket(),
+                       .invalid(length: AlvrControlProbe.maximumPacketBytes + 1))
+
+        var empty = AlvrControlReceiveBuffer()
+        empty.append(Data([0, 0, 0, 0, 9]))
+        XCTAssertEqual(empty.nextPacket(), .invalid(length: 0))
+
+        var huge = AlvrControlReceiveBuffer()
+        huge.append(Data([0xff, 0xff, 0xff, 0xff]))
+        XCTAssertEqual(huge.nextPacket(), .invalid(length: 0xffff_ffff))
+
+        var largestAllowed = AlvrControlReceiveBuffer()
+        largestAllowed.append(Data([0, 0x10, 0, 0, 7]))
+        XCTAssertEqual(largestAllowed.nextPacket(), .incomplete)
+    }
+
+    func testLiveControlSessionClosesOnAnOversizedLength() async throws {
+        var sockets: [Int32] = [-1, -1]
+        XCTAssertEqual(socketpair(AF_UNIX, SOCK_STREAM, 0, &sockets), 0)
+        defer { close(sockets[1]) }
+        let session = AlvrSessionHandshakeResult(clientState: .standby,
+                                                 negotiatedSettings: nil,
+                                                 streamReady: true,
+                                                 socket: sockets[0])
+        let disconnected = expectation(description: "session closed")
+        session.onDisconnect { disconnected.fulfill() }
+        session.onRequestIDR { XCTFail("nothing after the bad length is handled") }
+        // 1 MiB + 1 announced, then a packet that would be valid on its own.
+        let bytes = Data([0, 0x10, 0, 1]) + Self.framed(Self.littleEndian(UInt32(1)))
+        XCTAssertEqual(bytes.withUnsafeBytes { send(sockets[1], $0.baseAddress, bytes.count, 0) },
+                       bytes.count)
+        await fulfillment(of: [disconnected], timeout: 2)
+        withExtendedLifetime(session) {}
+    }
+
+    func testRefreshRatesLogTextShowsTheFirstFewAndACount() {
+        func capabilities(_ rates: [Float]) -> AlvrVideoCapabilities {
+            AlvrVideoCapabilities(
+                width: 2_064, height: 2_208, refreshRates: rates, microphoneSampleRate: 48_000,
+                supportsFoveatedEncoding: true, supportsHighProfile: true, supports10Bit: true,
+                supportsAV1: false, prefers10Bit: false, prefersFullRange: true,
+                preferredEncodingGamma: 1, prefersHDR: false)
+        }
+        XCTAssertEqual(capabilities([72, 80, 90, 120]).refreshRatesLogText, "72, 80, 90, 120")
+        XCTAssertEqual(capabilities([]).refreshRatesLogText, "")
+        XCTAssertEqual(capabilities(Array(repeating: 72, count: 8)).refreshRatesLogText,
+                       "72, 72, 72, 72, 72, 72, 72, 72")
+        let flood = capabilities(Array(repeating: 72, count: 16_383) + [90])
+        XCTAssertEqual(flood.refreshRatesLogText,
+                       "72, 72, 72, 72, 72, 72, 72, 72 and 16376 more")
+        XCTAssertLessThan(flood.refreshRatesLogText.utf8.count, 64)
     }
 
     func testLiveControlSessionReportsDisconnectOnce() async throws {

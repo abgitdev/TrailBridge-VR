@@ -1597,12 +1597,18 @@ XrResult XRAPI_CALL applyHapticFeedback(
         return XR_ERROR_VALIDATION_FAILURE;
     }
     const auto* vibration = reinterpret_cast<const XrHapticVibration*>(hapticFeedback);
-    if (vibration->duration < XR_MIN_HAPTIC_DURATION ||
-        !std::isfinite(vibration->frequency) || vibration->frequency < 0.0f ||
-        !std::isfinite(vibration->amplitude) ||
-        vibration->amplitude < 0.0f || vibration->amplitude > 1.0f) {
-        return XR_ERROR_VALIDATION_FAILURE;
-    }
+    // The specification states these ranges but defines no error for leaving
+    // them, and games through OpenComposite send values outside them (VTOL VR
+    // and Blade & Sorcery, for example). OpenComposite aborts the game on any
+    // failed call, so bring the values into range instead of rejecting them.
+    const XrDuration requestedDuration =
+        vibration->duration < XR_MIN_HAPTIC_DURATION
+            ? XR_MIN_HAPTIC_DURATION : vibration->duration;
+    const float frequency =
+        std::isfinite(vibration->frequency) && vibration->frequency > 0.0f
+            ? vibration->frequency : XR_FREQUENCY_UNSPECIFIED;
+    const float amplitude = std::isfinite(vibration->amplitude)
+        ? std::clamp(vibration->amplitude, 0.0f, 1.0f) : 0.0f;
 
     basalt::ControlInputSnapshot input{};
     controlInputSnapshot(session, &input);
@@ -1638,13 +1644,13 @@ XrResult XRAPI_CALL applyHapticFeedback(
     if (!isSessionFocused(session)) {
         return XR_SESSION_NOT_FOCUSED;
     }
-    const uint64_t duration = vibration->duration == XR_MIN_HAPTIC_DURATION
-        ? 20'000'000ULL : static_cast<uint64_t>(vibration->duration);
+    const uint64_t duration = requestedDuration == XR_MIN_HAPTIC_DURATION
+        ? 20'000'000ULL : static_cast<uint64_t>(requestedDuration);
     for (uint32_t hand = 0; hand < 2; ++hand) {
         if (hands[hand]) {
             controlSendHaptic(
                 session, static_cast<ControlHand>(hand), duration,
-                vibration->frequency, vibration->amplitude);
+                frequency, amplitude);
         }
     }
     return XR_SUCCESS;

@@ -6,12 +6,16 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <new>
 
 #include "control.hpp"
+#include "frame_period.hpp"
+#include "frame_trace.hpp"
 
 namespace {
 
-constexpr XrDuration kDisplayPeriod = 13'888'889;
+// Immutable for the live session, guarded by gLifecycleLock.
+XrDuration gDisplayPeriod = basalt::kDefaultDisplayPeriod;
 // A session emits at most ten state changes (IDLE through EXITING), and state
 // changes are never dropped, so the queue always has room to shed the oldest
 // other event when an application stops polling.
@@ -35,6 +39,7 @@ XrEventDataBuffer gEvents[kEventCapacity]{};
 size_t gEventHead = 0;
 size_t gEventCount = 0;
 uint32_t gLostEventCount = 0;
+uint64_t gTraceCounter = 0, gTraceWaiting = 0, gTraceBegun = 0;
 
 struct TimerApi {
     HANDLE timer = nullptr;
@@ -189,6 +194,13 @@ void queueStateLocked(XrSessionState state) {
     event.state = state;
     event.time = eventTime;
     queueEventLocked(&event, sizeof(event));
+    if (basalt::frameTraceEnabled()) {
+        basalt::TraceRecord trace;
+        trace.time = eventTime / 1000;
+        trace.result = state;
+        std::strcpy(trace.text, "session_state_changed");
+        basalt::frameTracePush(trace);
+    }
 }
 
 bool lifecycleMatchesLocked(XrSession session) {
@@ -198,6 +210,92 @@ bool lifecycleMatchesLocked(XrSession session) {
 }  // namespace
 
 namespace basalt {
+
+namespace {
+
+// XR_FB_display_refresh_rate. The stream runs at the one rate the session
+// was configured with (the period read at xrCreateSession), so that is the
+// only rate offered, and asking for it, or for no preference (0), succeeds.
+// The rate never changes, so no XrEventDataDisplayRefreshRateChangedFB is
+// queued. Rounded to millihertz so 72 Hz reads as 72, not 71.99999.
+XrResult sessionDisplayRefreshRate(XrSession session, float* rate) {
+    if (!isValidSession(session)) {
+        return XR_ERROR_HANDLE_INVALID;
+    }
+    AcquireSRWLockShared(&gLifecycleLock);
+    const bool matches = lifecycleMatchesLocked(session);
+    const XrInstance instance = gLifecycleInstance;
+    const XrDuration period = gDisplayPeriod;
+    ReleaseSRWLockShared(&gLifecycleLock);
+    if (!matches) {
+        return XR_ERROR_HANDLE_INVALID;
+    }
+    if (!isDisplayRefreshRateExtensionEnabled(instance)) {
+        return XR_ERROR_FUNCTION_UNSUPPORTED;
+    }
+    if (period <= 0) {
+        return XR_ERROR_RUNTIME_FAILURE;
+    }
+    const double millihertz =
+        std::round(1'000'000'000'000.0 / static_cast<double>(period));
+    *rate = static_cast<float>(millihertz / 1000.0);
+    return XR_SUCCESS;
+}
+
+}  // namespace
+
+XrResult XRAPI_CALL enumerateDisplayRefreshRates(
+    XrSession session,
+    uint32_t displayRefreshRateCapacityInput,
+    uint32_t* displayRefreshRateCountOutput,
+    float* displayRefreshRates) {
+    float rate = 0.0f;
+    const XrResult result = sessionDisplayRefreshRate(session, &rate);
+    if (XR_FAILED(result)) {
+        return result;
+    }
+    if (displayRefreshRateCountOutput == nullptr ||
+        (displayRefreshRateCapacityInput > 0 && displayRefreshRates == nullptr)) {
+        return XR_ERROR_VALIDATION_FAILURE;
+    }
+    *displayRefreshRateCountOutput = 1;
+    if (displayRefreshRateCapacityInput == 0) {
+        return XR_SUCCESS;
+    }
+    displayRefreshRates[0] = rate;
+    return XR_SUCCESS;
+}
+
+XrResult XRAPI_CALL getDisplayRefreshRate(
+    XrSession session,
+    float* displayRefreshRate) {
+    float rate = 0.0f;
+    const XrResult result = sessionDisplayRefreshRate(session, &rate);
+    if (XR_FAILED(result)) {
+        return result;
+    }
+    if (displayRefreshRate == nullptr) {
+        return XR_ERROR_VALIDATION_FAILURE;
+    }
+    *displayRefreshRate = rate;
+    return XR_SUCCESS;
+}
+
+XrResult XRAPI_CALL requestDisplayRefreshRate(
+    XrSession session,
+    float displayRefreshRate) {
+    float rate = 0.0f;
+    const XrResult result = sessionDisplayRefreshRate(session, &rate);
+    if (XR_FAILED(result)) {
+        return result;
+    }
+    if (displayRefreshRate == 0.0f ||
+        (std::isfinite(displayRefreshRate) &&
+         std::fabs(displayRefreshRate - rate) < 0.01f)) {
+        return XR_SUCCESS;
+    }
+    return XR_ERROR_DISPLAY_REFRESH_RATE_UNSUPPORTED_FB;
+}
 
 bool isSessionFocused(XrSession session) {
     AcquireSRWLockShared(&gLifecycleLock);
@@ -391,9 +489,11 @@ XrResult validateQuadLayer(
 namespace basalt {
 
 void initializeSessionLifecycle(XrInstance instance, XrSession session) {
+    const XrDuration displayPeriod = controlConfiguredDisplayPeriod();
     AcquireSRWLockExclusive(&gLifecycleLock);
     gLifecycleInstance = instance;
     gLifecycleSession = session;
+    gDisplayPeriod = displayPeriod;
     gSessionRunning = false;
     gSessionState = XR_SESSION_STATE_UNKNOWN;
     gLastEventTime = 0;
@@ -545,10 +645,13 @@ XrResult XRAPI_CALL endSession(XrSession session) {
     return XR_SUCCESS;
 }
 
-XrResult XRAPI_CALL waitFrame(
+template<bool tracing>
+XrResult waitFrameImpl(
     XrSession session,
     const XrFrameWaitInfo* frameWaitInfo,
     XrFrameState* frameState) {
+    int64_t traceEnter = 0, traceBudget = 0;
+    if (tracing) traceEnter = frameTraceNow();
     if (!isValidSession(session)) {
         return XR_ERROR_HANDLE_INVALID;
     }
@@ -585,7 +688,9 @@ XrResult XRAPI_CALL waitFrame(
     // wait owns a separate lock and may disconnect, so never hold the frame
     // lifecycle lock across it.
     ReleaseSRWLockExclusive(&gLifecycleLock);
+    if (tracing) traceBudget = frameTraceNow();
     controlWaitForFrameBudget(session);
+    if (tracing) traceBudget = frameTraceNow() - traceBudget;
     AcquireSRWLockExclusive(&gLifecycleLock);
     if (!lifecycleMatchesLocked(session)) {
         ReleaseSRWLockExclusive(&gLifecycleLock);
@@ -617,33 +722,49 @@ XrResult XRAPI_CALL waitFrame(
     // time. This preserves the requested average cadence without issuing
     // catch-up frames when the process misses a whole display period.
     XrTime nextDeadline = waitDeadline == 0
-                              ? now + kDisplayPeriod
-                              : waitDeadline + kDisplayPeriod;
+                              ? now + gDisplayPeriod
+                              : waitDeadline + gDisplayPeriod;
     if (nextDeadline <= now) {
         const XrDuration missed = now - nextDeadline;
-        nextDeadline += (missed / kDisplayPeriod + 1) * kDisplayPeriod;
+        nextDeadline += (missed / gDisplayPeriod + 1) * gDisplayPeriod;
     }
     gNextWaitDeadline = nextDeadline;
 
     const XrTime predictedDisplayTime = std::max(
-        now + kDisplayPeriod,
+        now + gDisplayPeriod,
         gLastPrediction == 0 ? static_cast<XrTime>(1)
-                             : gLastPrediction + kDisplayPeriod);
+                             : gLastPrediction + gDisplayPeriod);
     gLastPrediction = predictedDisplayTime;
     gWaitToken = true;
     frameState->predictedDisplayTime = predictedDisplayTime;
-    frameState->predictedDisplayPeriod = kDisplayPeriod;
+    frameState->predictedDisplayPeriod = gDisplayPeriod;
     // With the streamer daemon consuming frames, submitted images are
     // displayed; headless sessions keep telling the app not to render.
     frameState->shouldRender = controlActive(session) ? XR_TRUE : XR_FALSE;
+    TraceRecord trace;
+    if (tracing) {
+        trace.kind = TraceKind::Wait; trace.frame = ++gTraceCounter;
+        gTraceWaiting = trace.frame;
+        trace.waitEnter = traceEnter; trace.budgetWait = traceBudget;
+        trace.predicted = predictedDisplayTime / 1000;
+    }
     ReleaseSRWLockExclusive(&gLifecycleLock);
     controlNotePredictedDisplayTime(session, predictedDisplayTime);
+    if (tracing) { trace.waitExit = frameTraceNow(); frameTracePush(trace); }
     return XR_SUCCESS;
 }
 
-XrResult XRAPI_CALL beginFrame(
+XrResult XRAPI_CALL waitFrame(XrSession session, const XrFrameWaitInfo* info, XrFrameState* state) {
+    if (frameTraceEnabled()) return waitFrameImpl<true>(session, info, state);
+    return waitFrameImpl<false>(session, info, state);
+}
+
+template<bool tracing>
+XrResult beginFrameImpl(
     XrSession session,
     const XrFrameBeginInfo* frameBeginInfo) {
+    int64_t traceEnter = 0;
+    if (tracing) traceEnter = frameTraceNow();
     if (!isValidSession(session)) {
         return XR_ERROR_HANDLE_INVALID;
     }
@@ -668,14 +789,36 @@ XrResult XRAPI_CALL beginFrame(
     gWaitToken = false;
     const bool discarded = gFrameBegun;
     gFrameBegun = true;
+    if (tracing) {
+        TraceRecord r; r.kind = TraceKind::Begin;
+        r.control = discarded ? gTraceBegun : 0;
+        gTraceBegun = gTraceWaiting;
+        r.frame = gTraceBegun;
+        r.time = traceEnter; frameTracePush(r);
+    }
     WakeAllConditionVariable(&gFrameCondition);
     ReleaseSRWLockExclusive(&gLifecycleLock);
     return discarded ? XR_FRAME_DISCARDED : XR_SUCCESS;
 }
 
-XrResult XRAPI_CALL endFrame(
+XrResult XRAPI_CALL beginFrame(XrSession session, const XrFrameBeginInfo* info) {
+    if (frameTraceEnabled()) return beginFrameImpl<true>(session, info);
+    return beginFrameImpl<false>(session, info);
+}
+
+template<bool tracing>
+XrResult endFrameImpl(
     XrSession session,
     const XrFrameEndInfo* frameEndInfo) {
+    // Uninitialized while disabled: no fixed-record zero fill on that path.
+    alignas(TraceRecord) unsigned char traceStorage[sizeof(TraceRecord)];
+    auto& trace = *reinterpret_cast<TraceRecord*>(traceStorage);
+    if (tracing) {
+        new (&trace) TraceRecord{};
+        trace.kind = TraceKind::End;
+        trace.endEnter = frameTraceNow();
+    }
+    const XrResult tracedResult = [&]() -> XrResult {
     if (!isValidSession(session)) {
         return XR_ERROR_HANDLE_INVALID;
     }
@@ -695,6 +838,11 @@ XrResult XRAPI_CALL endFrame(
     if (!gFrameBegun) {
         ReleaseSRWLockExclusive(&gLifecycleLock);
         return XR_ERROR_CALL_ORDER_INVALID;
+    }
+    if (tracing) {
+        trace.frame = gTraceBegun;
+        trace.display = frameEndInfo->displayTime / 1000;
+        trace.layers = frameEndInfo->layerCount;
     }
     if (frameEndInfo->displayTime <= 0) {
         ReleaseSRWLockExclusive(&gLifecycleLock);
@@ -723,6 +871,11 @@ XrResult XRAPI_CALL endFrame(
     for (uint32_t index = 0; index < frameEndInfo->layerCount; ++index) {
         const XrCompositionLayerBaseHeader* layer = frameEndInfo->layers[index];
         XrResult layerResult = XR_SUCCESS;
+        if (tracing) {
+            if (layer && layer->type == XR_TYPE_COMPOSITION_LAYER_PROJECTION) ++trace.projections;
+            else if (layer && layer->type == XR_TYPE_COMPOSITION_LAYER_QUAD) ++trace.quads;
+            else ++trace.others;
+        }
         if (layer == nullptr) {
             layerResult = XR_ERROR_LAYER_INVALID;
         } else if (layer->type == XR_TYPE_COMPOSITION_LAYER_PROJECTION) {
@@ -761,14 +914,39 @@ XrResult XRAPI_CALL endFrame(
     }
     const uint64_t questTrackingTimestamp = haveFrameViews
         ? locatedViewsQuestTimestamp(session, frameEndInfo->displayTime) : 0;
+    if (tracing) {
+        trace.haveViews = haveFrameViews; trace.ready = haveFrameViews;
+        if (haveFrameViews) for (size_t i = 0; i < 2; ++i) {
+            const auto& v = frameViews[i];
+            trace.eyes[i] = {v.swapchainId, v.imageIndex, v.imageArrayIndex,
+                v.rect.extent.width, v.rect.extent.height};
+        }
+    }
     ReleaseSRWLockExclusive(&gLifecycleLock);
     if (haveFrameViews) {
         controlFrameReady(
             frameEndInfo->displayTime,
             questTrackingTimestamp,
-            frameViews, 2);
+            frameViews, 2, tracing ? trace.frame : 0);
     }
     return XR_SUCCESS;
+    }();
+    if (tracing && trace.frame) {
+        trace.result = tracedResult; trace.endExit = frameTraceNow();
+        // Failed EndFrame calls leave the begun frame live for a retry.
+        // Record their result as an event; only a completed frame gets a row.
+        if (XR_FAILED(tracedResult)) {
+            trace.kind = TraceKind::Event; trace.time = trace.endExit;
+            std::strcpy(trace.text, "end_frame_failed");
+        }
+        frameTracePush(trace);
+    }
+    return tracedResult;
+}
+
+XrResult XRAPI_CALL endFrame(XrSession session, const XrFrameEndInfo* info) {
+    if (frameTraceEnabled()) return endFrameImpl<true>(session, info);
+    return endFrameImpl<false>(session, info);
 }
 
 }  // namespace basalt

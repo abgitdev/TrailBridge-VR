@@ -66,11 +66,12 @@ private struct BasaltCLI {
       basaltctl [--root PATH] [--repo PATH] bottle install-dxmt NAME
       basaltctl [--root PATH] [--repo PATH] bottle install-runtime NAME
       basaltctl [--root PATH] [--repo PATH] bottle verify NAME
+      basaltctl [--root PATH] [--repo PATH] bottle add-folder NAME --from PATH [--folder NAME]
       basaltctl [--root PATH] [--repo PATH] profile list
       basaltctl [--root PATH] [--repo PATH] profile show NAME
       basaltctl [--root PATH] [--repo PATH] profile add NAME --bottle BOTTLE \
         --source direct|steam|bsmanager|itch --exe PATH [--cwd PATH] \
-        [--arg VALUE ...] [--env KEY=VALUE ...] [--game-root PATH]
+        [--arg VALUE ...] [--env KEY=VALUE ...] [--game-root PATH] [--title TEXT]
       basaltctl [--root PATH] [--repo PATH] opencomposite install PROFILE \
         --artifact /path/openvr_api.dll --target /managed/prefix/.../openvr_api.dll
       basaltctl [--root PATH] [--repo PATH] run PROFILE --control-file PATH [-- ARG ...]
@@ -78,6 +79,13 @@ private struct BasaltCLI {
     `bottle prepare` installs the Basalt DXMT fork and OpenXR runtime into an
     existing managed pinned-engine bottle. OpenComposite is deliberately supplied
     by the user and remains a separate GPLv3 artifact.
+
+    `bottle add-folder` copies a Windows game folder from any disk into
+    C:\\Games\\<folder> of a managed bottle, named after the source folder unless
+    --folder names it. It never starts Wine, never replaces an existing folder,
+    clones files on the same APFS volume, keeps 20 GiB free, and removes a
+    partial copy on failure or Ctrl-C. `profile add --title` sets the name the
+    Library shows.
     """
 
     static func main() {
@@ -205,9 +213,57 @@ private struct BasaltCLI {
             let name = try cursor.require("bottle name")
             try rejectRemainder(cursor)
             print(try manager.verify(name))
+        case "add-folder":
+            let name = try cursor.require("bottle name")
+            guard let source = try cursor.value(after: "--from") else {
+                throw BottleToolError("bottle add-folder requires --from PATH")
+            }
+            let folder = try cursor.value(after: "--folder")
+            try rejectRemainder(cursor)
+            try addFolder(manager, bottle: name,
+                          source: URL(fileURLWithPath: source, isDirectory: true),
+                          folder: folder)
         default:
             throw BottleToolError("Unknown bottle operation '\(operation)'")
         }
+    }
+
+    /// Scans the folder, then copies it with progress every 5 percent.
+    /// Ctrl-C cancels the copy, which then removes its partial work.
+    private static func addFolder(_ manager: BottleManager, bottle: String,
+                                  source: URL, folder: String?) throws {
+        let inventory = try manager.inventoryGameFolder(source)
+        let folderName = folder ?? inventory.source.lastPathComponent
+        do {
+            try GameFolderName.validate(folderName)
+        } catch where folder == nil {
+            throw BottleToolError("\(error.localizedDescription); name it with --folder NAME")
+        }
+        print("Found \(inventory.files.count) files, \(byteCount(inventory.totalBytes)), in \(inventory.source.path)")
+        fflush(stdout)
+        let interrupt = InterruptFlag()
+        interrupt.start()
+        defer { interrupt.stop() }
+        var printedStep = -1
+        let destination = try manager.copyGameFolder(
+            inventory, intoBottle: bottle, folderName: folderName,
+            progress: { progress in
+                let step = Int(progress.fraction * 20)
+                guard step > printedStep else { return }
+                printedStep = step
+                print("  \(step * 5)%  \(byteCount(progress.copiedBytes)) of \(byteCount(progress.totalBytes))")
+                fflush(stdout)
+            },
+            isCancelled: { interrupt.isSet })
+        print("Copied to \(destination.path)")
+        print(#"Windows path: C:\Games\"# + folderName)
+    }
+
+    private static func byteCount(_ bytes: Int64) -> String {
+        let formatter = ByteCountFormatter()
+        formatter.countStyle = .file
+        formatter.allowsNonnumericFormatting = false
+        return formatter.string(fromByteCount: bytes)
     }
 
     private static func profileCommand(_ cursor: inout ArgumentCursor,
@@ -238,6 +294,7 @@ private struct BasaltCLI {
             }
             let cwd = try cursor.value(after: "--cwd")
             let gameRoot = try cursor.value(after: "--game-root")
+            let title = try cursor.value(after: "--title")
             let arguments = try cursor.repeatedValues(after: "--arg")
             let environmentValues = try cursor.repeatedValues(after: "--env")
             var environment = [String: String]()
@@ -252,7 +309,7 @@ private struct BasaltCLI {
                 name: name, bottleName: bottle, source: source,
                 executable: executable, arguments: arguments,
                 workingDirectory: cwd, environment: environment,
-                gameRoot: gameRoot)
+                gameRoot: gameRoot, title: title)
             try manager.saveProfile(profile)
             print("Saved launch profile '\(name)'")
         default:
@@ -303,4 +360,31 @@ private struct BasaltCLI {
     }
 
     private static func yesNo(_ value: Bool) -> String { value ? "yes" : "no" }
+}
+
+/// Turns Ctrl-C into a request the copy polls, so it can remove its partial
+/// work before the command exits.
+private final class InterruptFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var interrupted = false
+    private var source: DispatchSourceSignal?
+
+    var isSet: Bool { lock.withLock { interrupted } }
+
+    func start() {
+        signal(SIGINT, SIG_IGN)
+        let source = DispatchSource.makeSignalSource(signal: SIGINT, queue: .global())
+        source.setEventHandler { [weak self] in
+            guard let self else { return }
+            self.lock.withLock { self.interrupted = true }
+        }
+        source.resume()
+        self.source = source
+    }
+
+    func stop() {
+        source?.cancel()
+        source = nil
+        signal(SIGINT, SIG_DFL)
+    }
 }

@@ -7,13 +7,23 @@
  * runtime and the native test daemon; C so both can include it.
  *
  * Transport: loopback TCP. The daemon listens on 127.0.0.1 on an ephemeral
- * port and writes "<port> <token> <per_eye_width> <per_eye_height>\n" to a
- * file; the launcher passes that
+ * port and writes "<port> <token> [<per_eye_width> <per_eye_height> [<millihertz>]]\n"
+ * to a file; the launcher passes that
  * file's Windows-visible path to the game bottle as BASALT_CONTROL. The
  * token is 32 lowercase hex characters and must be echoed in Hello.
  * Width and height are optional for compatibility; when absent or outside
  * BASALT_CONTROL_{MIN_VIEW_DIMENSION,MAX_VIEW_WIDTH,MAX_VIEW_HEIGHT} (or
- * odd), the runtime recommends its maximum per-eye size instead.
+ * odd), the runtime recommends BASALT_CONTROL_DEFAULT_VIEW_{WIDTH,HEIGHT}
+ * instead. Runtimes before the 4096 maximum recommended 1680x1760 and
+ * ignored anything larger.
+ *
+ * Optional integer millihertz (1..240000) sets the session display period;
+ * absent/invalid values retain 72 Hz. When dimensions are omitted but a rate
+ * is present, write 0 0 for dimensions. Streamers pad with spaces so the rate
+ * starts at byte offset 128: legacy v9 DLLs read only 127 bytes and reject a
+ * fifth field. New readers accept both padded and compact forms. Publish the
+ * file atomically only after ALVR negotiation; its existence releases launch.
+ * This file extension changes no socket payload, so protocol v9 is retained.
  *
  * Framing, all little-endian, no padding (fields are written sequentially,
  * not as C structs):
@@ -74,10 +84,14 @@
 #define BASALT_CONTROL_TOKEN_LENGTH 32u
 #define BASALT_CONTROL_MAX_MESSAGE_LENGTH 4096u
 /* Per-eye view size bounds. The maximum is also the runtime's advertised and
- * accepted swapchain limit. */
+ * accepted swapchain limit; how much a Mac can render, encode and a headset
+ * decode is the streamer's and the user's choice below it. The default is
+ * what the runtime recommends when the control file names no valid size. */
 #define BASALT_CONTROL_MIN_VIEW_DIMENSION 256u
-#define BASALT_CONTROL_MAX_VIEW_WIDTH 1680u
-#define BASALT_CONTROL_MAX_VIEW_HEIGHT 1760u
+#define BASALT_CONTROL_MAX_VIEW_WIDTH 4096u
+#define BASALT_CONTROL_MAX_VIEW_HEIGHT 4096u
+#define BASALT_CONTROL_DEFAULT_VIEW_WIDTH 1680u
+#define BASALT_CONTROL_DEFAULT_VIEW_HEIGHT 1760u
 
 enum {
     BASALT_MSG_HELLO = 1,

@@ -20,35 +20,44 @@ struct PerGameSettingsSheet: View {
     private var hasOverride: Bool { model.profileSettings[profileName] != nil }
 
     var body: some View {
-        SheetScaffold(symbol: "slider.horizontal.3", title: "Stream Settings", subtitle: profileName) {
+        SheetScaffold(
+            symbol: "slider.horizontal.3", title: L(.sheetPerGameTitle, model.gameTitle(forProfile: profileName)),
+            subtitle: hasOverride ? L(.sheetOwnSettings) : L(.sheetGlobalSettings)
+        ) {
             Form {
                 Section {
-                    StreamSettingsFields(settings: $settings, audioDevices: model.audioDevices)
-                } footer: {
-                    Text(hasOverride
-                         ? "This game uses its own stream settings. Use Defaults returns it to the settings in Settings."
-                         : "This game follows your default stream settings. Saving gives it its own copy.")
-                        .formFooterStyle()
+                    TBFormHeader {
+                        Text(hasOverride ? L(.sheetOwnSettings) : L(.sheetGlobalSettings))
+                            .font(TB.Typography.cardTitle)
+                            .accessibilityAddTraits(.isHeader)
+                        Text(hasOverride ? L(.sheetOverrideHelp) : L(.sheetGlobalHelp))
+                            .foregroundStyle(TB.textSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                Section {
+                    StreamSettingsFields(settings: $settings, audioDevices: model.audioDevices,
+                                         recommendation: model.qualityRecommendation)
                 }
             }
-            .formStyle(.grouped)
+            .tbGroupedForm()
         } actions: {
-            Button("Use Defaults") {
+            Button(L(.sheetUseGlobal)) {
                 model.resetStreamSettings(for: profileName)
                 dismiss()
             }
             .disabled(!hasOverride)
             Spacer()
-            Button("Cancel") { dismiss() }
+            Button(L(.commonCancel)) { dismiss() }
                 .keyboardShortcut(.cancelAction)
-            Button("Save") {
+            Button(L(.sheetSave)) {
                 model.saveStreamSettings(settings, for: profileName)
                 dismiss()
             }
             .keyboardShortcut(.defaultAction)
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(TBPrimaryButtonStyle())
         }
-        .frame(width: 600, height: 440)
+        .frame(width: 660, height: 560)
     }
 }
 
@@ -59,9 +68,11 @@ struct ProfileEditorSheet: View {
     @State private var source: LaunchSource
     @State private var executable: String
     @State private var workingDirectory: String
+    @State private var gameRoot: String
     @State private var arguments: String
     @State private var environment: String
     @State private var confirmingDelete = false
+    @State private var showingOpenVR = false
 
     init(profile: LaunchProfile, model: BasaltAppModel) {
         self.profile = profile
@@ -69,6 +80,7 @@ struct ProfileEditorSheet: View {
         _source = State(initialValue: profile.source)
         _executable = State(initialValue: profile.executable)
         _workingDirectory = State(initialValue: profile.workingDirectory ?? "")
+        _gameRoot = State(initialValue: profile.gameRoot ?? "")
         _arguments = State(initialValue: profile.arguments.joined(separator: "\n"))
         _environment = State(initialValue: profile.environment.sorted { $0.key < $1.key }
             .map { "\($0.key)=\($0.value)" }.joined(separator: "\n"))
@@ -77,76 +89,90 @@ struct ProfileEditorSheet: View {
     var body: some View {
         SheetScaffold(
             symbol: "doc.text",
-            title: "Launch Profile",
-            subtitle: "\(profile.name) · \(profile.bottleName)"
+            title: L(.sheetProfileTitle),
+            subtitle: L(.sheetIdentity, profile.name, profile.bottleName)
         ) {
             Form {
                 Section {
-                    Picker("Source", selection: $source) {
+                    Picker(L(.sheetSource), selection: $source) {
                         ForEach(LaunchSource.allCases, id: \.self) {
-                            Text($0.rawValue.capitalized).tag($0)
+                            Text(sourceTitle($0)).tag($0)
                         }
                     }
-                    StackedField(title: "Windows executable", text: $executable,
-                                 prompt: "C:\\Games\\Game.exe")
-                    StackedField(title: "Working directory", text: $workingDirectory,
-                                 prompt: "Optional host folder")
+                    StackedField(title: L(.sheetExecutable), text: $executable,
+                                 prompt: L(.sheetExecutableExample))
+                    StackedField(title: L(.sheetWorkingDirectory), text: $workingDirectory,
+                                 prompt: L(.sheetOptionalFolder))
+                    StackedField(title: L(.sheetGameFolder), text: $gameRoot,
+                                 prompt: L(.sheetGameFolderExample))
                 }
 
                 Section {
                     TextEditor(text: $arguments)
+                        .accessibilityLabel(L(.sheetArguments))
                         .font(.body.monospaced())
                         .frame(minHeight: 60)
                 } header: {
-                    Text("Arguments")
+                    Text(L(.sheetArguments))
                 } footer: {
-                    Text("One argument per line.")
-                        .formFooterStyle()
+                    Text(L(.sheetArgumentsHelp))
+                        .tbFormFooterStyle()
                 }
 
                 Section {
                     TextEditor(text: $environment)
+                        .accessibilityLabel(L(.sheetEnvironment))
                         .font(.body.monospaced())
                         .frame(minHeight: 80)
                 } header: {
-                    Text("Environment")
+                    Text(L(.sheetEnvironment))
                 } footer: {
-                    Text("One KEY=VALUE entry per line.")
-                        .formFooterStyle()
+                    Text(L(.sheetEnvironmentHelp))
+                        .tbFormFooterStyle()
                 }
 
-                Section {
-                    HStack {
-                        Text("Replace the game's openvr_api.dll with a copy of OpenComposite you supply.")
-                            .foregroundStyle(.secondary)
-                        Spacer(minLength: 12)
-                        Button("Install…") { installOpenComposite() }
+                Section(L(.openVRTitle)) {
+                    Button(L(.sheetManageOpenVR)) { showingOpenVR = true }
+                    if gameRoot != (profile.gameRoot ?? "") {
+                        Text(L(.sheetSaveGameFolder))
+                            .tbFormFooterStyle()
                     }
-                } header: {
-                    Text("OpenComposite")
                 }
             }
-            .formStyle(.grouped)
+            .tbGroupedForm()
         } actions: {
-            Button("Delete Profile…", role: .destructive) { confirmingDelete = true }
+            Button(L(.sheetDeleteProfileMenu), role: .destructive) { confirmingDelete = true }
             Spacer()
-            Button("Cancel") { dismiss() }
+            Button(L(.commonCancel)) { dismiss() }
                 .keyboardShortcut(.cancelAction)
-            Button("Save") { save() }
+            Button(L(.sheetSave)) { save() }
                 .keyboardShortcut(.defaultAction)
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(TBPrimaryButtonStyle())
                 .disabled(executable.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
-        .frame(width: 640, height: 640)
+        .frame(width: 660, height: 560)
+        .sheet(isPresented: $showingOpenVR) {
+            OpenVRSupportSheet(profile: profile, model: model)
+        }
         .confirmationDialog(
-            "Delete '\(profile.name)'?", isPresented: $confirmingDelete,
+            L(.sheetDeleteProfileQuestion, model.gameTitle(forProfile: profile.name)), isPresented: $confirmingDelete,
             titleVisibility: .visible) {
-                Button("Delete Profile", role: .destructive) {
+                Button(L(.sheetDeleteProfile), role: .destructive) {
                     Task { await model.deleteProfile(profile.name); dismiss() }
                 }
+                Button(L(.commonCancel), role: .cancel) {}
             } message: {
-                Text("The bottle and installed game will not be removed.")
+                Text(L(.sheetDeleteProfileHelp))
             }
+    }
+
+    private func sourceTitle(_ source: LaunchSource) -> String {
+        switch source {
+        case .direct: L(.libraryDirect)
+        case .steam: L(.commonSteam)
+        case .bsmanager: L(.commonBSManager)
+        case .itch: L(.commonItch)
+        }
     }
 
     private func save() {
@@ -155,35 +181,16 @@ struct ProfileEditorSheet: View {
             guard let split = line.firstIndex(of: "="), split != line.startIndex else { continue }
             values[String(line[..<split])] = String(line[line.index(after: split)...])
         }
-        let updated = LaunchProfile(
-            name: profile.name, bottleName: profile.bottleName, source: source,
-            executable: executable.trimmingCharacters(in: .whitespacesAndNewlines),
-            arguments: arguments.components(separatedBy: .newlines).filter { !$0.isEmpty },
-            workingDirectory: workingDirectory.isEmpty ? nil : workingDirectory,
-            environment: values, gameRoot: profile.gameRoot)
+        // Start from the profile itself, so fields this sheet does not edit,
+        // such as the title of a game added from a folder, are kept.
+        var updated = profile
+        updated.source = source
+        updated.executable = executable.trimmingCharacters(in: .whitespacesAndNewlines)
+        updated.arguments = arguments.components(separatedBy: .newlines).filter { !$0.isEmpty }
+        updated.workingDirectory = workingDirectory.isEmpty ? nil : workingDirectory
+        updated.environment = values
+        updated.gameRoot = gameRoot.isEmpty ? nil : gameRoot
         Task { await model.updateProfile(updated); dismiss() }
-    }
-
-    private func installOpenComposite() {
-        guard let bottle = model.bottles.first(where: { $0.name == profile.bottleName }) else {
-            model.alertMessage = "The managed bottle for this profile is missing."
-            return
-        }
-        let dll = UTType(filenameExtension: "dll")!
-        guard let source = FilePanels.chooseFile(
-            title: "Choose the OpenComposite openvr_api.dll", extensions: ["dll"]) else { return }
-
-        let targetPanel = NSSavePanel()
-        targetPanel.title = "Choose the game's openvr_api.dll location"
-        targetPanel.allowedContentTypes = [dll]
-        targetPanel.nameFieldStringValue = "openvr_api.dll"
-        targetPanel.directoryURL = URL(fileURLWithPath: bottle.prefixPath)
-            .appendingPathComponent("drive_c", isDirectory: true)
-        guard targetPanel.runModal() == .OK, let target = targetPanel.url else { return }
-        Task {
-            await model.installOpenComposite(
-                profileName: profile.name, artifact: source, target: target)
-        }
     }
 }
 
@@ -206,33 +213,32 @@ struct ImportBottleSheet: View {
     var body: some View {
         SheetScaffold(
             symbol: "square.on.square",
-            title: "Copy into Basalt",
-            subtitle: "\(bottle.name) · \(bottle.origin.label)"
+            title: L(.sheetCopyTitle),
+            subtitle: L(.sheetIdentity, bottle.name, bottle.origin.label)
         ) {
             Form {
                 Section {
-                    TextField("New bottle name", text: $name)
-                    LabeledContent("Source") { PathText(path: bottle.prefix.path) }
+                    TextField(L(.sheetCopyName), text: $name)
+                    LabeledContent(L(.sheetSource)) { PathText(path: bottle.prefix.path) }
                 }
                 Section {
-                    Label("The original prefix remains untouched.", systemImage: "lock.shield")
-                    Label("Files use APFS copy-on-write cloning when supported, so the copy is fast and space-efficient.", systemImage: "internaldrive")
-                    Label("Copying never launches Steam. Prepare installs Basalt DXMT and OpenXR afterward.", systemImage: "wrench.and.screwdriver")
+                    Label(L(.sheetCopyOriginal), systemImage: "lock.shield")
+                    Label(L(.sheetCopyAPFS), systemImage: "internaldrive")
+                    Label(L(.sheetCopyPrepare), systemImage: "wrench.and.screwdriver")
                 }
-                .foregroundStyle(.secondary)
+                .foregroundStyle(TB.textSecondary)
+                if isCopying {
+                    Chip(text: L(.sheetCopyProgress), kind: .progress)
+                }
             }
-            .formStyle(.grouped)
+            .tbGroupedForm()
             .disabled(isCopying)
         } actions: {
-            if isCopying {
-                ProgressView().controlSize(.small)
-                Text("Cloning… keep BasaltVR open.").foregroundStyle(.secondary)
-            }
             Spacer()
-            Button("Cancel") { dismiss() }
+            Button(L(.commonCancel)) { dismiss() }
                 .keyboardShortcut(.cancelAction)
                 .disabled(isCopying)
-            Button(isCopying ? "Copying…" : "Copy Bottle") {
+            Button(isCopying ? L(.sheetCopying) : L(.sheetCopyAction)) {
                 let destination = name
                 isCopying = true
                 Task {
@@ -244,10 +250,10 @@ struct ImportBottleSheet: View {
                 }
             }
             .keyboardShortcut(.defaultAction)
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(TBPrimaryButtonStyle())
             .disabled(name.isEmpty || isCopying)
         }
-        .frame(width: 580, height: 380)
+        .frame(width: 620, height: 440)
         .interactiveDismissDisabled(isCopying)
     }
 }
@@ -261,27 +267,26 @@ struct BSManagerInstallerSheet: View {
     var body: some View {
         SheetScaffold(
             symbol: "arrow.down.circle",
-            title: "Install BSManager",
-            subtitle: "Runs the Windows installer inside a Basalt bottle.",
-            tint: .purple
+            title: L(.sheetBSInstallTitle),
+            subtitle: L(.sheetBSInstallHelp)
         ) {
             Form {
                 Section {
-                    LabeledContent("Installer") {
+                    LabeledContent(L(.sheetInstaller)) {
                         Text(installer.lastPathComponent).font(.callout.monospaced())
                     }
                     BottlePicker(selection: $selectedBottle, bottles: model.bottles)
                 } footer: {
-                    Text("BSManager and the Beat Saber versions it creates stay isolated in that bottle.")
-                        .formFooterStyle()
+                    Text(L(.sheetBSIsolation))
+                        .tbFormFooterStyle()
                 }
             }
-            .formStyle(.grouped)
+            .tbGroupedForm()
         } actions: {
             Spacer()
-            Button("Cancel") { dismiss() }
+            Button(L(.commonCancel)) { dismiss() }
                 .keyboardShortcut(.cancelAction)
-            Button("Run Installer") {
+            Button(L(.sheetRunInstaller)) {
                 guard let bottle = model.bottles.first(where: {
                     $0.name == selectedBottle
                 }) else { return }
@@ -289,10 +294,10 @@ struct BSManagerInstallerSheet: View {
                 dismiss()
             }
             .keyboardShortcut(.defaultAction)
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(TBPrimaryButtonStyle())
             .disabled(selectedBottle.isEmpty)
         }
-        .frame(width: 560, height: 300)
+        .frame(width: 580, height: 360)
         .onAppear {
             if selectedBottle.isEmpty {
                 selectedBottle = model.bsManagerInstallations.first?.bottleName
@@ -311,32 +316,31 @@ struct BSManagerBottleSheet: View {
     var body: some View {
         SheetScaffold(
             symbol: "wand.and.stars",
-            title: "Create BSManager Profile",
-            subtitle: "Beat Saber \(instance.name)",
-            tint: .purple
+            title: L(.sheetBSProfileTitle),
+            subtitle: L(.libraryBeatSaberVersion, instance.name)
         ) {
             if model.bottles.isEmpty {
                 ContentUnavailableView(
-                    "No Basalt bottle",
+                    L(.sheetNoBottle),
                     systemImage: "shippingbox",
-                    description: Text("Create and prepare a bottle before adding this instance."))
+                    description: Text(L(.sheetBSNoBottleHelp)))
                     .frame(maxHeight: .infinity)
             } else {
                 Form {
                     Section {
                         BottlePicker(selection: $selectedBottle, bottles: model.bottles)
                     } footer: {
-                        Text("The bottle that will run this version. The BSManager instance stays in place and is not modified.")
-                            .formFooterStyle()
+                        Text(L(.sheetBSBottleHelp))
+                            .tbFormFooterStyle()
                     }
                 }
-                .formStyle(.grouped)
+                .tbGroupedForm()
             }
         } actions: {
             Spacer()
-            Button("Cancel") { dismiss() }
+            Button(L(.commonCancel)) { dismiss() }
                 .keyboardShortcut(.cancelAction)
-            Button("Create Profile") {
+            Button(L(.libraryCreateProfile)) {
                 guard let bottle = model.bottles.first(where: {
                     $0.name == selectedBottle
                 }) else { return }
@@ -346,10 +350,10 @@ struct BSManagerBottleSheet: View {
                 }
             }
             .keyboardShortcut(.defaultAction)
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(TBPrimaryButtonStyle())
             .disabled(selectedBottle.isEmpty)
         }
-        .frame(width: 540, height: 280)
+        .frame(width: 580, height: 360)
         .onAppear {
             if selectedBottle.isEmpty {
                 selectedBottle = instance.bottleName
@@ -392,74 +396,79 @@ struct AddGameSheet: View {
     var body: some View {
         SheetScaffold(
             symbol: "plus.app",
-            title: "Add Game",
-            subtitle: "A Windows game from GOG, itch.io, or any installer."
+            title: L(.libraryAddGame),
+            subtitle: L(.sheetAddHelp)
         ) {
             if model.bottles.isEmpty {
                 ContentUnavailableView(
-                    "No Basalt bottle",
+                    L(.sheetNoBottle),
                     systemImage: "shippingbox",
-                    description: Text("Create a bottle and install the game in it before adding the game."))
+                    description: Text(L(.sheetAddNoBottleHelp)))
                     .frame(maxHeight: .infinity)
             } else {
                 Form {
                     Section {
                         BottlePicker(selection: $selectedBottle, bottles: model.bottles)
-                        LabeledContent("Game") {
+                        LabeledContent(L(.streamGame)) {
                             HStack(spacing: 8) {
                                 if let executable {
                                     PathText(path: executable.path)
                                 }
-                                Button("Choose Game…") { chooseGame() }
+                                Button(L(.sheetChooseGame)) { chooseGame() }
                                     .disabled(bottle == nil)
                             }
                         }
                         if isOutsideBottle {
-                            Label("The game must be installed in the \(selectedBottle) bottle first. Use Bottles → ⋯ → Run Windows Installer…, then choose the game's .exe in the bottle's drive_c folder.",
+                            Label(L(.sheetOutsideBottle, selectedBottle),
                                   systemImage: "exclamationmark.triangle.fill")
-                                .foregroundStyle(.red)
+                                .foregroundStyle(TB.dangerText)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
                     } footer: {
-                        Text("Choose the game's .exe in the bottle's drive_c folder.")
-                            .formFooterStyle()
+                        Text(L(.sheetChooseExeHelp))
+                            .tbFormFooterStyle()
                     }
 
                     Section {
-                        TextField("Name", text: $name, prompt: Text("Game name"))
-                        Picker("Source", selection: $source) {
-                            Text("Direct").tag(LaunchSource.direct)
-                            Text("itch.io").tag(LaunchSource.itch)
+                        TextField(L(.sheetGameName), text: $name, prompt: Text(L(.sheetGameNamePrompt)))
+                        Picker(L(.sheetSource), selection: $source) {
+                            Text(L(.libraryDirect)).tag(LaunchSource.direct)
+                            Text(L(.commonItch)).tag(LaunchSource.itch)
                         }
-                        TextField("Arguments", text: $arguments, prompt: Text("Optional"))
+                        TextField(L(.sheetArguments), text: $arguments, prompt: Text(L(.sheetOptional)))
                             .font(.body.monospaced())
                     } footer: {
-                        Text("Separate arguments with spaces. Quotes are not parsed, so an argument cannot contain a space.")
-                            .formFooterStyle()
+                        Text(L(.sheetSpaceArguments))
+                            .tbFormFooterStyle()
                     }
 
                     Section {
-                        Label("SteamVR games also need OpenComposite: after adding, open Edit Launch Profile… → OpenComposite → Install…. Native OpenXR games don't.",
+                        Label(L(.sheetOpenVRHelp),
                               systemImage: "info.circle")
                             .fixedSize(horizontal: false, vertical: true)
                     }
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(TB.textSecondary)
                 }
-                .formStyle(.grouped)
+                .tbGroupedForm()
                 .disabled(isAdding)
+                .overlay(alignment: .bottomLeading) {
+                    if isAdding {
+                        Chip(text: L(.sheetAdding), kind: .progress).padding(20)
+                    }
+                }
             }
         } actions: {
             Spacer()
-            Button("Cancel") { dismiss() }
+            Button(L(.commonCancel)) { dismiss() }
                 .keyboardShortcut(.cancelAction)
                 .disabled(isAdding)
-            Button("Add Game") { add() }
+            Button(L(.libraryAddGame)) { add() }
                 .keyboardShortcut(.defaultAction)
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(TBPrimaryButtonStyle())
                 .disabled(bottle == nil || executable == nil || isOutsideBottle
                           || trimmedName.isEmpty || isAdding)
         }
-        .frame(width: 600, height: 520)
+        .frame(width: 660, height: 560)
         .interactiveDismissDisabled(isAdding)
         .onAppear {
             if selectedBottle.isEmpty, model.bottles.count == 1 {
@@ -470,8 +479,8 @@ struct AddGameSheet: View {
 
     private func chooseGame() {
         guard let prefix, let url = FilePanels.chooseFile(
-            title: "Choose the Game's Windows Executable",
-            message: "Select the game's .exe inside the bottle's drive_c folder.",
+            title: L(.sheetChooseExeTitle),
+            message: L(.sheetChooseExeHelp),
             extensions: ["exe"],
             startingAt: prefix.appendingPathComponent("drive_c", isDirectory: true))
         else { return }
@@ -519,8 +528,8 @@ private struct BottlePicker: View {
     let bottles: [ManagedBottle]
 
     var body: some View {
-        Picker("Basalt bottle", selection: $selection) {
-            Text("Select a bottle").tag("")
+        Picker(L(.sheetBottle), selection: $selection) {
+            Text(L(.sheetSelectBottle)).tag("")
             ForEach(bottles, id: \.name) { bottle in
                 Text(bottle.name).tag(bottle.name)
             }
@@ -541,55 +550,67 @@ struct DiagnosticReportSheet: View {
     @State private var copied = false
     @State private var errorMessage: String?
 
-    private let redactor = DiagnosticRedactor()
+    /// The folders this app run uses, which may not be the ones it was
+    /// started with when the person chose another data folder.
+    private var redactor: DiagnosticRedactor {
+        DiagnosticRedactor(dataFolder: model.dataRoot.path, appFolder: model.repoRoot.path)
+    }
     private static let bugReportURL = URL(
-        string: "https://github.com/frenchbaguetteman/BasaltVR/issues/new?template=bug_report.yml")!
+        string: "https://github.com/abgitdev/TrailBridge-VR/issues/new?template=bug_report.yml")!
 
     var body: some View {
         SheetScaffold(
-            symbol: "stethoscope", title: "Diagnostic Report",
-            subtitle: "Review what will be shared. BasaltVR never uploads it."
+            symbol: "stethoscope", title: L(.diagnosticsTitle),
+            subtitle: L(.diagnosticsSubtitle)
         ) {
             VStack(alignment: .leading, spacing: 10) {
-                Toggle("Include the session log", isOn: $includeLog)
+                if copied { Chip(text: L(.diagnosticsCopied), kind: .success) }
+                if errorMessage != nil { Chip(text: L(.commonError), kind: .failed) }
+                Toggle(L(.diagnosticsIncludeLog), isOn: $includeLog)
                 SessionLogView(text: markdown, followsTail: false)
+                    .accessibilityLabel(L(.diagnosticsReportPreview))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(.background.secondary, in: RoundedRectangle(cornerRadius: 8))
+                    .background(TB.sunkenBackground, in: RoundedRectangle(cornerRadius: 8))
                     .overlay(
                         RoundedRectangle(cornerRadius: 8)
-                            .strokeBorder(Color.primary.opacity(0.08)))
-                Text("Your home folder and user name, email addresses, Steam IDs, headset serials and names, Mac host names, IP and MAC addresses, and tokens are replaced with placeholders. Launch-profile environment values are never included.")
-                    .formFooterStyle()
+                            .strokeBorder(TB.hairline))
+                Text(L(.diagnosticsRedaction))
+                    .tbFormFooterStyle()
             }
             .padding(20)
         } actions: {
-            Button("Open Bug Report Form") { NSWorkspace.shared.open(Self.bugReportURL) }
-                .help("Opens GitHub in your browser; paste the copied report into the logs field")
+            Button(L(.diagnosticsBugForm)) { NSWorkspace.shared.open(Self.bugReportURL) }
+                .help(L(.diagnosticsBugFormHelp))
             Spacer()
-            Menu("Save") {
-                Button("Markdown…") { save(asJSON: false) }
-                Button("JSON…") { save(asJSON: true) }
+            Menu {
+                Button(L(.diagnosticsMarkdown)) { save(asJSON: false) }
+                Button(L(.diagnosticsJSON)) { save(asJSON: true) }
+            } label: {
+                Text(L(.sheetSave))
+                    .font(TB.Typography.body).foregroundStyle(TB.textPrimary)
+                    .padding(.horizontal, 12).frame(height: TB.Size.quietButton)
+                    .background(TB.quietFill, in: RoundedRectangle(cornerRadius: TB.Radius.quietButton))
+                    .overlay(RoundedRectangle(cornerRadius: TB.Radius.quietButton).strokeBorder(TB.quietBorder))
             }
-            .fixedSize()
+            .menuStyle(.button).buttonStyle(.plain).fixedSize()
             .disabled(report == nil)
-            Button(copied ? "Copied" : "Copy Markdown") {
+            Button(copied ? L(.diagnosticsCopied) : L(.diagnosticsCopy)) {
                 NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(markdown, forType: .string)
-                copied = true
+                copied = NSPasteboard.general.setString(markdown, forType: .string)
             }
             .disabled(report == nil)
-            Button("Done") { dismiss() }
+            Button(L(.sheetDone)) { dismiss() }
                 .keyboardShortcut(.defaultAction)
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(TBPrimaryButtonStyle())
         }
-        .frame(width: 760, height: 620)
+        .frame(width: 800, height: 560)
         .onAppear(perform: rebuild)
         .onChange(of: includeLog) { rebuild() }
-        .alert("BasaltVR", isPresented: Binding(
+        .alert(L(.appName), isPresented: Binding(
             get: { errorMessage != nil },
             set: { if !$0 { errorMessage = nil } }
         )) {
-            Button("OK") { errorMessage = nil }
+            Button(L(.commonOK)) { errorMessage = nil }
         } message: {
             Text(errorMessage ?? "")
         }
@@ -604,13 +625,13 @@ struct DiagnosticReportSheet: View {
 
     private func save(asJSON: Bool) {
         guard let report, let url = FilePanels.saveFile(
-            title: "Save Diagnostic Report", baseName: "BasaltVR-diagnostics",
+            title: L(.diagnosticsSaveTitle), baseName: "BasaltVR-diagnostics",
             fileExtension: asJSON ? "json" : "md") else { return }
         do {
             let text = asJSON ? try report.json(redactedWith: redactor) : markdown
             try text.write(to: url, atomically: true, encoding: .utf8)
         } catch {
-            errorMessage = "Could not save \(url.lastPathComponent): \(error.localizedDescription)"
+            errorMessage = L(.diagnosticsSaveFailure, url.lastPathComponent, error.localizedDescription)
         }
     }
 }

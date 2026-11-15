@@ -1,0 +1,253 @@
+Optional local failure diagnostics for the MIT DXMT v0.80 base.
+
+Gate all instrumentation and output behind DXMT_BASALT_DIAGNOSTICS=1.
+BASALT_REPO_ROOT must resolve without symlinks; outputs are private, per-process
+subdirectories of .local/diagnostics. No default-path fallback or public upload.
+
+Retain exact AIR-containing metallibs on library/function objects only in
+diagnostic mode; on failed graphics/mesh/compute PSO creation dump those blobs,
+function names, descriptor and error. Label command buffers/encoders and enable
+Metal encoder execution status; record the first completion error once.
+This instrumentation does not change shader generation or retry a failed PSO.
+
+Authored against the MIT v0.80 base; no later upstream code is included.
+
+diff --git a/src/winemetal/unix/winemetal_unix.c b/src/winemetal/unix/winemetal_unix.c
+--- a/src/winemetal/unix/winemetal_unix.c
++++ b/src/winemetal/unix/winemetal_unix.c
+@@ -12,6 +12,7 @@
+ #define WINEMETAL_API
+ #include "../winemetal_thunks.h"
+ #include "../airconv_thunks.h"
++#include "basalt_diagnostics.h"
+ 
+ typedef int NTSTATUS;
+ #define STATUS_SUCCESS 0
+@@ -106,6 +107,21 @@
+ static NTSTATUS
+ _MTLCommandQueue_commandBuffer(void *obj) {
+   struct unixcall_generic_obj_obj_ret *params = obj;
++  if (basalt_diagnostics_directory()) {
++    MTLCommandBufferDescriptor *descriptor = [[MTLCommandBufferDescriptor alloc] init];
++    descriptor.errorOptions = MTLCommandBufferErrorOptionEncoderExecutionStatus;
++    id<MTLCommandBuffer> buffer = [(id<MTLCommandQueue>)params->handle commandBufferWithDescriptor:descriptor];
++    [descriptor release];
++    static atomic_uint_fast64_t sequence;
++    buffer.label = [NSString stringWithFormat:@"Basalt DXMT command buffer %llu",
++        (unsigned long long)atomic_fetch_add(&sequence, 1)];
++    [buffer addCompletedHandler:^(id<MTLCommandBuffer> completed) {
++      if (completed.status == MTLCommandBufferStatusError)
++        basalt_dump_first_gpu_error(completed);
++    }];
++    params->ret = (obj_handle_t)buffer;
++    return STATUS_SUCCESS;
++  }
+   params->ret = (obj_handle_t)[(id<MTLCommandQueue>)params->handle commandBuffer];
+   return STATUS_SUCCESS;
+ }
+@@ -359,6 +375,7 @@
+   id<MTLDevice> device = (id<MTLDevice>)params->device;
+   NSError *err = NULL;
+   params->ret_library = (obj_handle_t)[device newLibraryWithData:(dispatch_data_t)params->data error:&err];
++  basalt_attach_library_data((id)params->ret_library, (dispatch_data_t)params->data);
+   params->ret_error = (obj_handle_t)err;
+   return STATUS_SUCCESS;
+ }
+@@ -369,6 +386,7 @@
+   id<MTLLibrary> library = (id<MTLLibrary>)params->handle;
+   NSString *name = [[NSString alloc] initWithCString:(char *)params->arg encoding:NSUTF8StringEncoding];
+   params->ret = (obj_handle_t)[library newFunctionWithName:name];
++  basalt_attach_function_data((id)params->ret, library);
+   [name release];
+   return STATUS_SUCCESS;
+ }
+@@ -407,6 +425,10 @@
+       info->fail_on_binary_archive_miss ? MTLPipelineOptionFailOnBinaryArchiveMiss : MTLPipelineOptionNone;
+   params->ret_pso =
+       (obj_handle_t)[device newComputePipelineStateWithDescriptor:descriptor options:options reflection:nil error:&err];
++  if (!params->ret_pso) {
++    id<MTLFunction> functions[] = {descriptor.computeFunction};
++    basalt_dump_pipeline_failure(descriptor, err, functions, 1);
++  }
+   params->ret_error = (obj_handle_t)err;
+   if (!err && info->binary_archive_for_serialization) {
+     [(id<MTLBinaryArchive>)info->binary_archive_for_serialization addComputePipelineFunctionsWithDescriptor:descriptor
+@@ -420,6 +442,7 @@
+ _MTLCommandBuffer_blitCommandEncoder(void *obj) {
+   struct unixcall_generic_obj_obj_ret *params = obj;
+   params->ret = (obj_handle_t)[(id<MTLCommandBuffer>)params->handle blitCommandEncoder];
++  basalt_label_encoder((id)params->ret, (id)params->handle, @"blit");
+   return STATUS_SUCCESS;
+ }
+ 
+@@ -428,6 +451,7 @@
+   struct unixcall_generic_obj_uint64_obj_ret *params = obj;
+   params->ret = (obj_handle_t)[(id<MTLCommandBuffer>)params->handle
+       computeCommandEncoderWithDispatchType:params->arg ? MTLDispatchTypeConcurrent : MTLDispatchTypeSerial];
++  basalt_label_encoder((id)params->ret, (id)params->handle, @"compute");
+   return STATUS_SUCCESS;
+ }
+ 
+@@ -485,6 +509,7 @@
+   }
+ 
+   params->ret = (obj_handle_t)[(id<MTLCommandBuffer>)params->handle renderCommandEncoderWithDescriptor:descriptor];
++  basalt_label_encoder((id)params->ret, (id)params->handle, @"render");
+ 
+   [descriptor release];
+   return STATUS_SUCCESS;
+@@ -591,6 +616,10 @@
+                                                                                               options:options
+                                                                                            reflection:nil
+                                                                                                 error:&err];
++  if (!params->ret_pso) {
++    id<MTLFunction> functions[] = {descriptor.vertexFunction, descriptor.fragmentFunction};
++    basalt_dump_pipeline_failure(descriptor, err, functions, 2);
++  }
+   params->ret_error = (obj_handle_t)err;
+   if (!err && info->binary_archive_for_serialization) {
+     [(id<MTLBinaryArchive>)info->binary_archive_for_serialization addRenderPipelineFunctionsWithDescriptor:descriptor
+@@ -661,6 +690,10 @@
+                                                                                                   options:options
+                                                                                                reflection:nil
+                                                                                                     error:&err];
++  if (!params->ret_pso) {
++    id<MTLFunction> functions[] = {descriptor.objectFunction, descriptor.meshFunction, descriptor.fragmentFunction};
++    basalt_dump_pipeline_failure(descriptor, err, functions, 3);
++  }
+   params->ret_error = (obj_handle_t)err;
+ #if __MAC_OS_X_VERSION_MAX_ALLOWED >= 150000
+   if (@available(macOS 15, *)) {
+@@ -2310,6 +2343,7 @@
+     [values setConstantValue:constants[i].data.ptr type:(MTLDataType)constants[i].type atIndex:constants[i].index];
+ 
+   params->ret = (obj_handle_t)[library newFunctionWithName:name constantValues:values error:&err];
++  basalt_attach_function_data((id)params->ret, library);
+   params->ret_error = (obj_handle_t)err;
+   [name release];
+   [values release];
+@@ -2737,6 +2771,7 @@
+   }
+ 
+   params->ret = (obj_handle_t)[cmdbuf blitCommandEncoderWithDescriptor:blit_desc];
++  basalt_label_encoder((id)params->ret, cmdbuf, @"blit-samples");
+ 
+   [blit_desc release];
+   return STATUS_SUCCESS;
+diff --git a/src/winemetal/unix/basalt_diagnostics.h b/src/winemetal/unix/basalt_diagnostics.h
+new file mode 100644
+--- /dev/null
++++ b/src/winemetal/unix/basalt_diagnostics.h
+@@ -0,0 +1,112 @@
++/* Optional local diagnostics for the MIT-licensed DXMT v0.80 fork.
++ * Copyright (c) 2026 TrailBridge VR contributors. MIT license.
++ */
++#pragma once
++#include <stdlib.h>
++#include <string.h>
++#include <unistd.h>
++#include <objc/runtime.h>
++
++static bool
++basalt_diagnostics_enabled(void) {
++  const char *value = getenv("DXMT_BASALT_DIAGNOSTICS");
++  return value && !strcmp(value, "1");
++}
++
++/* Never fall back to the working directory, HOME or the system temp directory.
++ * Reject symlinks in the output path. Each process gets a fresh private run dir.
++ */
++static NSString *
++basalt_diagnostics_directory(void) {
++  static NSString *directory;
++  static dispatch_once_t once;
++  dispatch_once(&once, ^{
++    const char *root = getenv("BASALT_REPO_ROOT");
++    if (!basalt_diagnostics_enabled() || !root || root[0] != '/')
++      return;
++    NSString *base = [[NSString stringWithUTF8String:root] stringByAppendingPathComponent:@".local/diagnostics"];
++    base = [base stringByStandardizingPath];
++    if (![[base stringByResolvingSymlinksInPath] isEqualToString:base])
++      return;
++    NSString *path = [base stringByAppendingPathComponent:
++        [NSString stringWithFormat:@"dxmt-%d-%@", getpid(), [[NSUUID UUID] UUIDString]]];
++    if ([[NSFileManager defaultManager] createDirectoryAtPath:path withIntermediateDirectories:YES
++          attributes:@{NSFilePosixPermissions: @0700} error:nil])
++      directory = [path copy];
++  });
++  return directory;
++}
++
++static char basalt_air_data_key;
++
++/* Retain the exact cached or freshly generated AIR-containing metallib only
++ * while diagnostics are enabled; ordinary runs have no extra copies or I/O.
++ */
++static void
++basalt_attach_library_data(id library, dispatch_data_t data) {
++  if (!basalt_diagnostics_directory() || !library)
++    return;
++  const void *bytes;
++  size_t size;
++  dispatch_data_t mapped = dispatch_data_create_map(data, &bytes, &size);
++  if (mapped) {
++    NSData *copy = [NSData dataWithBytes:bytes length:size];
++    objc_setAssociatedObject(library, &basalt_air_data_key, copy, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
++    dispatch_release(mapped);
++  }
++}
++
++static void
++basalt_attach_function_data(id function, id library) {
++  if (!basalt_diagnostics_directory() || !function)
++    return;
++  objc_setAssociatedObject(function, &basalt_air_data_key,
++      objc_getAssociatedObject(library, &basalt_air_data_key), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
++}
++
++static void
++basalt_dump_pipeline_failure(id descriptor, NSError *error, id<MTLFunction> const *functions, size_t count) {
++  NSString *directory = basalt_diagnostics_directory();
++  if (!directory)
++    return;
++  NSString *stem = [@"pipeline-" stringByAppendingString:[[NSUUID UUID] UUIDString]];
++  NSMutableString *text = [NSMutableString stringWithFormat:@"%@\n%@\n", error, descriptor];
++  for (size_t i = 0; i < count; i++) {
++    if (!functions[i])
++      continue;
++    NSData *data = objc_getAssociatedObject(functions[i], &basalt_air_data_key);
++    NSString *name = [NSString stringWithFormat:@"%@-shader-%zu.metallib", stem, i];
++    BOOL saved = data && [data writeToFile:[directory stringByAppendingPathComponent:name] atomically:YES];
++    [text appendFormat:@"\nshader[%zu]: %@; AIR file: %@\n", i, [functions[i] name], saved ? name : @"unavailable"];
++  }
++  [text writeToFile:[directory stringByAppendingPathComponent:[stem stringByAppendingString:@".txt"]]
++        atomically:YES encoding:NSUTF8StringEncoding error:nil];
++}
++
++static void
++basalt_label_encoder(id<MTLCommandEncoder> encoder, id<MTLCommandBuffer> buffer, NSString *kind) {
++  if (!basalt_diagnostics_directory())
++    return;
++  static atomic_uint_fast64_t sequence;
++  encoder.label = [NSString stringWithFormat:@"%@ / %@ %llu", buffer.label, kind,
++      (unsigned long long)atomic_fetch_add(&sequence, 1)];
++}
++
++static void
++basalt_dump_first_gpu_error(id<MTLCommandBuffer> buffer) {
++  if (!basalt_diagnostics_directory())
++    return;
++  static dispatch_once_t once;
++  dispatch_once(&once, ^{
++    NSError *error = buffer.error;
++    NSMutableString *text = [NSMutableString stringWithFormat:@"label: %@\n%@\n%@\n",
++        buffer.label, buffer, error];
++    fprintf(stderr, "err:   Basalt first GPU error: command buffer=%p label=%s: %s\n",
++        (void *)buffer, [buffer.label UTF8String], [[error description] UTF8String]);
++    for (id<MTLCommandBufferEncoderInfo> info in error.userInfo[MTLCommandBufferEncoderInfoErrorKey])
++      [text appendFormat:@"encoder: %@; state: %ld; signposts: %@\n",
++          info.label, (long)info.errorState, info.debugSignposts];
++    [text writeToFile:[basalt_diagnostics_directory() stringByAppendingPathComponent:@"first-gpu-error.txt"]
++          atomically:YES encoding:NSUTF8StringEncoding error:nil];
++  });
++}

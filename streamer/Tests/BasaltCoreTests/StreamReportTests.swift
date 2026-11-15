@@ -24,9 +24,16 @@ final class StreamReportTests: XCTestCase {
             transport: "USB", framesPerSecond: 72, megabitsPerSecond: 12.43,
             maximumWriteMilliseconds: 0.4, largestFrameKibibytes: 96,
             idrCount: 1, repeatedTimestamps: 0)
-        // Transport fps is not the headset's frame rate.
+        // Transport fps is not the headset's frame rate; it is what the Mac sent.
         XCTAssertEqual(StreamReport.parse(video), StreamReport.Values(
-            questFPS: nil, videoMegabits: 12.4, latencyMilliseconds: nil))
+            questFPS: nil, videoMegabits: 12.4, latencyMilliseconds: nil, sentFPS: 72))
+
+        let wifi = StreamReport.videoSendLine(
+            transport: "Wi-Fi", framesPerSecond: 53.24, megabitsPerSecond: 110.3,
+            maximumWriteMilliseconds: 1.0, largestFrameKibibytes: 300,
+            idrCount: 1, repeatedTimestamps: 2)
+        XCTAssertEqual(StreamReport.parse(wifi)?.sentFPS, 53.2)
+        XCTAssertEqual(StreamReport.parse(wifi)?.videoMegabits, 110.3)
 
         let audio = StreamReport.audioSendLine(
             transport: "USB", blocksPerSecond: 100, pcmMegabits: 1.536,

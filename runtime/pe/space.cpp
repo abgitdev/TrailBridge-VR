@@ -1,12 +1,16 @@
 #include "runtime.hpp"
+#include "frame_trace.hpp"
 
 #include <windows.h>
 
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 
 #include "control.hpp"
+#include "controller_pose.hpp"
 #include "pose_math.hpp"
 
 namespace {
@@ -33,6 +37,18 @@ constexpr float kEyeOffsetMeters = 0.063f / 2.0f;
 constexpr float kEyeFovHalfAngleRadians = 0.785398163f;
 constexpr uint32_t kViewCount = 2;
 
+float touchGripPitchDegrees() {
+    static const float degrees = [] {
+        const float value = basalt::parseTouchGripPitch(
+            std::getenv("BASALT_TOUCH_GRIP_PITCH_DEGREES"));
+        if (value != 0.0f) {
+            std::fprintf(stderr, "Basalt OpenXR: Touch grip pitch override %.3f degrees\n", value);
+        }
+        return value;
+    }();
+    return degrees;
+}
+
 enum class SpaceKind {
     kReference,
     kAction,
@@ -58,6 +74,15 @@ bool isSupportedReferenceSpace(XrReferenceSpaceType type) {
 }
 
 SRWLOCK gSpaceLock = SRWLOCK_INIT;
+// The newest tracked eye poses, reused through a gap in tracking, with the
+// LOCAL definition they were computed in.
+struct HeldViews {
+    XrSession session = XR_NULL_HANDLE;
+    XrSpace space = XR_NULL_HANDLE;
+    XrPosef poses[kViewCount]{};
+    basalt::ControlLocalDefinition local{};
+};
+HeldViews gHeldViews;
 struct LocatedViewsSample {
     XrSession session = XR_NULL_HANDLE;
     XrTime displayTime = 0;
@@ -101,6 +126,13 @@ bool poseValid(const XrPosef& pose) {
         static_cast<double>(orientation.z) * orientation.z +
         static_cast<double>(orientation.w) * orientation.w);
     return norm >= 0.99 && norm <= 1.01;
+}
+
+bool posesEqual(const XrPosef& a, const XrPosef& b) {
+    return a.orientation.x == b.orientation.x && a.orientation.y == b.orientation.y &&
+           a.orientation.z == b.orientation.z && a.orientation.w == b.orientation.w &&
+           a.position.x == b.position.x && a.position.y == b.position.y &&
+           a.position.z == b.position.z;
 }
 
 SpaceRecord* findSpaceLocked(XrSpace space) {
@@ -375,12 +407,15 @@ XrResult XRAPI_CALL locateSpace(
         controlInputSnapshot(target.session, &input, time);
 
         auto localFromSpace = [&](const SpaceRecord& record, bool actionResolved,
-                                  uint32_t hand, XrPosef* pose) -> bool {
+                                  uint32_t hand, bool aim, XrPosef* pose) -> bool {
             if (record.kind == SpaceKind::kAction) {
                 if (!actionResolved || hand >= 2 || !input.controllers[hand].poseActive) {
                     return false;
                 }
-                *pose = poseCompose(input.controllers[hand].poseInLocal, record.pose);
+                // getActionPoseSource currently resolves only Oculus Touch.
+                *pose = basalt::touchActionPoseInLocal(
+                    input.controllers[hand].poseInLocal, hand, aim,
+                    touchGripPitchDegrees(), record.pose);
                 return true;
             }
             // Only VIEW follows the head. LOCAL, LOCAL_FLOOR and STAGE are
@@ -400,8 +435,8 @@ XrResult XRAPI_CALL locateSpace(
 
         XrPosef targetInLocal{};
         XrPosef baseInLocal{};
-        if (!localFromSpace(target, targetActionResolved, targetHand, &targetInLocal) ||
-            !localFromSpace(base, baseActionResolved, baseHand, &baseInLocal)) {
+        if (!localFromSpace(target, targetActionResolved, targetHand, targetAim, &targetInLocal) ||
+            !localFromSpace(base, baseActionResolved, baseHand, baseAim, &baseInLocal)) {
             location->locationFlags = 0;
             location->pose = identityPose();
             setChainedSpaceVelocity(
@@ -484,9 +519,10 @@ XrResult XRAPI_CALL locateViews(
 
     XrPosef headInLocal{};
     uint64_t headQuestTimestamp = 0;
+    ControlLocalDefinition local{};
     const bool headTracked = controlHeadPose(
         session, viewLocateInfo->displayTime,
-        &headQuestTimestamp, &headInLocal);
+        &headQuestTimestamp, &headInLocal, frameTraceEnabled(), &local);
     XrPosef baseInLocal{};
     bool baseTracked = false;
     if (base.kind == SpaceKind::kReference) {
@@ -507,11 +543,49 @@ XrResult XRAPI_CALL locateViews(
         controlInputSnapshot(session, &input, viewLocateInfo->displayTime);
         if (getActionPoseSource(session, base.action, base.subactionPath, &hand, &aim) &&
             hand < 2 && input.controllers[hand].poseActive) {
-            baseInLocal = poseCompose(input.controllers[hand].poseInLocal, base.pose);
+            baseInLocal = basalt::touchActionPoseInLocal(
+                input.controllers[hand].poseInLocal, hand, aim,
+                touchGripPitchDegrees(), base.pose);
             baseTracked = true;
         }
     }
     const bool viewsTracked = headTracked && baseTracked;
+
+    // During a gap in tracking keep the last known eye poses. Identity would
+    // make the game render one frame from the tracking origin, outside the
+    // player's view. The poses stay valid but are no longer reported tracked.
+    // A held pose relative to a VIEW or action base relates two tracked
+    // entities and does not depend on the LOCAL definition, so it is returned
+    // as stored. That includes a fresh head with a lost controller base: the
+    // last known eye-in-controller relation is a valid, untracked estimate.
+    XrPosef heldPoses[kViewCount]{};
+    bool viewsHeld = false;
+    if (!viewsTracked) {
+        ControlLocalDefinition heldLocal{};
+        AcquireSRWLockShared(&gSpaceLock);
+        viewsHeld = gHeldViews.session == session && gHeldViews.space == viewLocateInfo->space;
+        if (viewsHeld) {
+            for (uint32_t index = 0; index < kViewCount; ++index) {
+                heldPoses[index] = gHeldViews.poses[index];
+            }
+            heldLocal = gHeldViews.local;
+        }
+        ReleaseSRWLockShared(&gSpaceLock);
+        // LOCAL, LOCAL_FLOOR and STAGE share the LOCAL origin. Poses held on
+        // the other side of a recenter's changeTime would draw this frame
+        // shifted by the recenter, so re-express them in the definition this
+        // locate uses. Without a definition (disconnected) they stay as held.
+        if (viewsHeld && base.kind == SpaceKind::kReference &&
+            base.referenceSpaceType != XR_REFERENCE_SPACE_TYPE_VIEW &&
+            heldLocal.valid && local.valid &&
+            !posesEqual(heldLocal.localFromQuest, local.localFromQuest)) {
+            const XrPosef baseFromHeldBase = basalt::baseFromPreviousBase(
+                base.pose, heldLocal.localFromQuest, local.localFromQuest);
+            for (uint32_t index = 0; index < kViewCount; ++index) {
+                heldPoses[index] = poseCompose(baseFromHeldBase, heldPoses[index]);
+            }
+        }
+    }
 
     // OpenXR enumeration calls (capacity == 0) must return the same view
     // state as the data-producing call. Set it before the early return.
@@ -520,7 +594,9 @@ XrResult XRAPI_CALL locateViews(
               XR_VIEW_STATE_POSITION_VALID_BIT |
               XR_VIEW_STATE_ORIENTATION_TRACKED_BIT |
               XR_VIEW_STATE_POSITION_TRACKED_BIT
-        : 0;
+        : viewsHeld
+            ? XR_VIEW_STATE_ORIENTATION_VALID_BIT | XR_VIEW_STATE_POSITION_VALID_BIT
+            : 0;
     *viewCountOutput = kViewCount;
     if (viewCapacityInput == 0) {
         recordLocatedViewsSample(
@@ -553,13 +629,25 @@ XrResult XRAPI_CALL locateViews(
     for (uint32_t index = 0; index < kViewCount; ++index) {
         XrPosef eyeOffset = identityPose();
         eyeOffset.position.x = index == 0 ? -halfIpd : halfIpd;
-        if (!viewsTracked) {
-            views[index].pose = identityPose();
-        } else {
+        if (viewsTracked) {
             views[index].pose = poseCompose(
                 poseCompose(poseInvert(baseInLocal), headInLocal), eyeOffset);
+        } else if (viewsHeld) {
+            views[index].pose = heldPoses[index];
+        } else {
+            views[index].pose = identityPose();
         }
         views[index].fov = calibratedFov[index];
+    }
+    if (viewsTracked) {
+        AcquireSRWLockExclusive(&gSpaceLock);
+        gHeldViews.session = session;
+        gHeldViews.space = viewLocateInfo->space;
+        for (uint32_t index = 0; index < kViewCount; ++index) {
+            gHeldViews.poses[index] = views[index].pose;
+        }
+        gHeldViews.local = local;
+        ReleaseSRWLockExclusive(&gSpaceLock);
     }
     recordLocatedViewsSample(
         session, viewLocateInfo->displayTime,
@@ -604,6 +692,9 @@ XrResult XRAPI_CALL destroySpace(XrSpace space) {
 
 void invalidateSpacesForSession(XrSession session) {
     AcquireSRWLockExclusive(&gSpaceLock);
+    if (gHeldViews.session == session) {
+        gHeldViews = {};
+    }
     for (SpaceRecord& record : gSpaces) {
         if (record.session == session) {
             record = {};

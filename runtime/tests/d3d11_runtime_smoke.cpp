@@ -3,6 +3,7 @@
 #include <d3d11_1.h>
 #include <dxgi1_2.h>
 
+#define XR_USE_PLATFORM_WIN32
 #include <openxr/openxr.h>
 #include <openxr/openxr_platform.h>
 
@@ -12,6 +13,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <set>
 #include <vector>
 
@@ -453,10 +455,15 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    const char* enabledExtensions[] = {XR_KHR_D3D11_ENABLE_EXTENSION_NAME};
+    // Unity's OpenXR plugin enables both on Windows; Valve's refresh-rate
+    // feature (BONELAB) adds the third.
+    const char* enabledExtensions[] = {
+        XR_KHR_D3D11_ENABLE_EXTENSION_NAME,
+        XR_KHR_WIN32_CONVERT_PERFORMANCE_COUNTER_TIME_EXTENSION_NAME,
+        XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME};
     XrInstanceCreateInfo instanceInfo{};
     instanceInfo.type = XR_TYPE_INSTANCE_CREATE_INFO;
-    instanceInfo.enabledExtensionCount = 1;
+    instanceInfo.enabledExtensionCount = 3;
     instanceInfo.enabledExtensionNames = enabledExtensions;
     instanceInfo.applicationInfo.apiVersion = XR_API_VERSION_1_0;
     std::strncpy(instanceInfo.applicationInfo.applicationName, "Basalt D3D11 smoke",
@@ -467,6 +474,15 @@ int main(int argc, char** argv) {
     if (XR_FAILED(result)) {
         return fail("xrCreateInstance(D3D11)", result);
     }
+    PFN_xrVoidFunction counterToTimeVoid = nullptr;
+    result = xrGetInstanceProcAddr(
+        instance, "xrConvertWin32PerformanceCounterToTimeKHR", &counterToTimeVoid);
+    if (XR_FAILED(result) || counterToTimeVoid == nullptr) {
+        xrDestroyInstance(instance);
+        return fail("xrGetInstanceProcAddr(xrConvertWin32PerformanceCounterToTimeKHR)", result);
+    }
+    const auto counterToTime =
+        reinterpret_cast<PFN_xrConvertWin32PerformanceCounterToTimeKHR>(counterToTimeVoid);
 
     XrSystemGetInfo systemInfo{};
     systemInfo.type = XR_TYPE_SYSTEM_GET_INFO;
@@ -499,8 +515,8 @@ int main(int argc, char** argv) {
         configurationViews[1].recommendedImageRectWidth != expectedWidth ||
         configurationViews[0].recommendedImageRectHeight != expectedHeight ||
         configurationViews[1].recommendedImageRectHeight != expectedHeight ||
-        configurationViews[0].maxImageRectWidth != 1680 ||
-        configurationViews[0].maxImageRectHeight != 1760) {
+        configurationViews[0].maxImageRectWidth != 4096 ||
+        configurationViews[0].maxImageRectHeight != 4096) {
         xrDestroyInstance(instance);
         return fail("xrEnumerateViewConfigurationViews dimensions", result);
     }
@@ -602,6 +618,70 @@ int main(int argc, char** argv) {
         release(device);
         xrDestroyInstance(instance);
         return fail("xrCreateSession(D3D11 binding)", result);
+    }
+
+    {
+        // XR_FB_display_refresh_rate offers exactly the session's rate:
+        // 72 Hz without a control file, which is how this runs unconnected.
+        PFN_xrVoidFunction enumerateRatesVoid = nullptr;
+        PFN_xrVoidFunction getRateVoid = nullptr;
+        PFN_xrVoidFunction requestRateVoid = nullptr;
+        result = xrGetInstanceProcAddr(
+            instance, "xrEnumerateDisplayRefreshRatesFB", &enumerateRatesVoid);
+        if (XR_SUCCEEDED(result)) {
+            result = xrGetInstanceProcAddr(
+                instance, "xrGetDisplayRefreshRateFB", &getRateVoid);
+        }
+        if (XR_SUCCEEDED(result)) {
+            result = xrGetInstanceProcAddr(
+                instance, "xrRequestDisplayRefreshRateFB", &requestRateVoid);
+        }
+        const char* failure = nullptr;
+        if (XR_FAILED(result) || enumerateRatesVoid == nullptr ||
+            getRateVoid == nullptr || requestRateVoid == nullptr) {
+            failure = "xrGetInstanceProcAddr(display refresh rate)";
+        }
+        uint32_t rateCount = 0;
+        float rates[2]{};
+        float currentRate = 0.0f;
+        if (failure == nullptr) {
+            auto enumerateRates =
+                reinterpret_cast<PFN_xrEnumerateDisplayRefreshRatesFB>(enumerateRatesVoid);
+            auto getRate = reinterpret_cast<PFN_xrGetDisplayRefreshRateFB>(getRateVoid);
+            auto requestRate =
+                reinterpret_cast<PFN_xrRequestDisplayRefreshRateFB>(requestRateVoid);
+            result = enumerateRates(session, 0, &rateCount, nullptr);
+            if (XR_FAILED(result) || rateCount != 1) {
+                failure = "xrEnumerateDisplayRefreshRatesFB(count)";
+            } else if (XR_FAILED(result = enumerateRates(session, 2, &rateCount, rates)) ||
+                       rateCount != 1 || !(rates[0] > 0.0f)) {
+                failure = "xrEnumerateDisplayRefreshRatesFB(values)";
+            } else if (enumerateRates(session, 1, nullptr, rates) !=
+                       XR_ERROR_VALIDATION_FAILURE) {
+                failure = "xrEnumerateDisplayRefreshRatesFB(null count)";
+            } else if (XR_FAILED(result = getRate(session, &currentRate)) ||
+                       currentRate != rates[0] ||
+                       (!expectConnected() && currentRate != 72.0f)) {
+                failure = "xrGetDisplayRefreshRateFB";
+            } else if (getRate(session, nullptr) != XR_ERROR_VALIDATION_FAILURE) {
+                failure = "xrGetDisplayRefreshRateFB(null)";
+            } else if (XR_FAILED(result = requestRate(session, currentRate)) ||
+                       XR_FAILED(result = requestRate(session, 0.0f))) {
+                failure = "xrRequestDisplayRefreshRateFB(current or no preference)";
+            } else if ((result = requestRate(session, currentRate + 17.0f)) !=
+                       XR_ERROR_DISPLAY_REFRESH_RATE_UNSUPPORTED_FB) {
+                failure = "xrRequestDisplayRefreshRateFB(unsupported)";
+            }
+        }
+        if (failure != nullptr) {
+            xrDestroySession(session);
+            release(context);
+            release(device);
+            xrDestroyInstance(instance);
+            return fail(failure, result);
+        }
+        std::printf("PASS: display refresh rate %.3f Hz offered, read and requested\n",
+                    static_cast<double>(currentRate));
     }
 
     uint32_t referenceSpaceCount = 0;
@@ -794,6 +874,25 @@ int main(int argc, char** argv) {
         release(device);
         xrDestroyInstance(instance);
         return fail("first xrWaitFrame", result);
+    }
+    // A counter read now converts onto the clock of predictedDisplayTime:
+    // a second either way allows for the frame period, not for another clock.
+    LARGE_INTEGER counterNow{};
+    XrTime counterTime = 0;
+    result = QueryPerformanceCounter(&counterNow)
+        ? counterToTime(instance, &counterNow, &counterTime)
+        : XR_ERROR_RUNTIME_FAILURE;
+    if (XR_FAILED(result) ||
+        frameState.predictedDisplayTime < counterTime - 1'000'000'000 ||
+        frameState.predictedDisplayTime > counterTime + 1'000'000'000) {
+        std::fprintf(stderr, "FAIL: predicted display time %lld is not near the converted counter %lld\n",
+                     static_cast<long long>(frameState.predictedDisplayTime),
+                     static_cast<long long>(counterTime));
+        xrDestroySession(session);
+        release(context);
+        release(device);
+        xrDestroyInstance(instance);
+        return fail("xrConvertWin32PerformanceCounterToTimeKHR", result);
     }
     result = xrBeginFrame(session, nullptr);
     XrFrameEndInfo frameEndInfo{};
@@ -1305,6 +1404,43 @@ int main(int argc, char** argv) {
         release(device);
         xrDestroyInstance(instance);
         return fail("haptic feedback", result);
+    }
+
+    if (!expectConnected()) {
+        // Values outside the stated ranges are brought into range rather
+        // than rejected: OpenComposite aborts the game on any failure. The
+        // connected daemon reads amplitudes as test commands, so only the
+        // unfocused path checks this.
+        const float nan = std::numeric_limits<float>::quiet_NaN();
+        const struct {
+            XrDuration duration;
+            float frequency;
+            float amplitude;
+        } outOfRange[] = {
+            {50'000'000, XR_FREQUENCY_UNSPECIFIED, 2.0f},
+            {50'000'000, XR_FREQUENCY_UNSPECIFIED, -0.5f},
+            {50'000'000, -160.0f, 0.5f},
+            {50'000'000, nan, nan},
+            {-5'000'000, 160.0f, 0.5f},
+        };
+        for (const auto& values : outOfRange) {
+            XrHapticVibration loose{};
+            loose.type = XR_TYPE_HAPTIC_VIBRATION;
+            loose.duration = values.duration;
+            loose.frequency = values.frequency;
+            loose.amplitude = values.amplitude;
+            result = xrApplyHapticFeedback(
+                session, &hapticInfo,
+                reinterpret_cast<const XrHapticBaseHeader*>(&loose));
+            if (result != XR_SESSION_NOT_FOCUSED) {
+                xrDestroySession(session);
+                release(context);
+                release(device);
+                xrDestroyInstance(instance);
+                return fail("haptic feedback outside stated ranges", result);
+            }
+        }
+        std::puts("PASS: haptic values outside stated ranges are accepted");
     }
 
     if (injectedController) {
@@ -1886,16 +2022,28 @@ int main(int argc, char** argv) {
             xrDestroyInstance(instance);
             return fail("xrDestroySpace(tracked VIEW)", result);
         }
+        // Hold eye poses from before changeTime, as when tracking drops right
+        // after a recenter. Should the head already be stale here, the held
+        // poses stay those from after changeTime; the two held locates below
+        // then still cross the recenter in one direction.
+        viewLocateInfo.displayTime = recenterEvent.changeTime - 1;
+        result = xrLocateViews(
+            session, &viewLocateInfo, &viewState, 2, &viewCount, locatedViews);
+        viewLocateInfo.displayTime = recenterEvent.changeTime + 1;
         // The daemon keeps publishing head poses until it releases the reset
         // button, so poll for the 500 ms freshness window to lapse after that
         // instead of assuming how long the hold outlasts the recenter event.
+        // A stale head keeps the last eye poses valid but no longer tracked:
+        // identity poses would show the game one frame from the origin.
+        constexpr XrViewStateFlags kHeldViewFlags =
+            XR_VIEW_STATE_ORIENTATION_VALID_BIT | XR_VIEW_STATE_POSITION_VALID_BIT;
         bool headPoseStale = false;
         for (int attempt = 0; XR_SUCCEEDED(result) && attempt < 100; ++attempt) {
             Sleep(20);
             viewState.viewStateFlags = kTrackedViewFlags;
             result = xrLocateViews(
                 session, &viewLocateInfo, &viewState, 0, &viewCount, nullptr);
-            if (XR_SUCCEEDED(result) && viewState.viewStateFlags == 0) {
+            if (XR_SUCCEEDED(result) && viewState.viewStateFlags == kHeldViewFlags) {
                 headPoseStale = true;
                 break;
             }
@@ -1907,6 +2055,44 @@ int main(int argc, char** argv) {
             xrDestroyInstance(instance);
             return fail("xrLocateViews(stale head pose)", result);
         }
+        // Held poses follow the LOCAL definition of the locate: after
+        // changeTime they are in the recentered LOCAL, before it in the
+        // previous one, exactly as the tracked locates above.
+        result = xrLocateViews(
+            session, &viewLocateInfo, &viewState, 2, &viewCount, locatedViews);
+        if (XR_FAILED(result) || viewState.viewStateFlags != kHeldViewFlags ||
+            !nearlyEqual(locatedViews[0].pose.position.x, -0.032f) ||
+            !nearlyEqual(locatedViews[1].pose.position.x, 0.032f) ||
+            !nearlyEqual(locatedViews[0].pose.position.y, 1.5f) ||
+            !nearlyEqual(locatedViews[0].pose.position.z, 0.0f) ||
+            !nearlyEqual(locatedViews[1].pose.position.z, 0.0f) ||
+            !nearlyEqual(locatedViews[0].pose.orientation.y, 0.0f) ||
+            !nearlyEqual(locatedViews[0].pose.orientation.w, 1.0f)) {
+            xrDestroySession(session);
+            release(context);
+            release(device);
+            xrDestroyInstance(instance);
+            return fail("xrLocateViews(held after Quest reset)", result);
+        }
+        viewLocateInfo.displayTime = recenterEvent.changeTime - 1;
+        result = xrLocateViews(
+            session, &viewLocateInfo, &viewState, 2, &viewCount, locatedViews);
+        viewLocateInfo.displayTime = recenterEvent.changeTime + 1;
+        if (XR_FAILED(result) || viewState.viewStateFlags != kHeldViewFlags ||
+            !nearlyEqual(locatedViews[0].pose.position.x, -0.25f) ||
+            !nearlyEqual(locatedViews[1].pose.position.x, -0.25f) ||
+            !nearlyEqual(locatedViews[0].pose.position.y, 1.5f) ||
+            !nearlyEqual(locatedViews[0].pose.position.z, 0.282f) ||
+            !nearlyEqual(locatedViews[1].pose.position.z, 0.218f) ||
+            !nearlyEqual(locatedViews[0].pose.orientation.y, 0.707106781f) ||
+            !nearlyEqual(locatedViews[0].pose.orientation.w, 0.707106781f)) {
+            xrDestroySession(session);
+            release(context);
+            release(device);
+            xrDestroyInstance(instance);
+            return fail("xrLocateViews(held before Quest reset changeTime)", result);
+        }
+        std::puts("PASS: held eye poses follow the LOCAL definition across a recenter");
 
         // A replacement ALVR session restarts the Quest clock. Ask the
         // daemon for InputReset followed by a head pose whose timestamp (1)
@@ -1988,15 +2174,12 @@ int main(int argc, char** argv) {
         result = xrEnumerateSwapchainFormats(
             session, formatCount, &formatCount, formats.data());
     }
-    bool foundBgra = false;
-    for (int64_t format : formats) {
-        foundBgra = foundBgra || format == DXGI_FORMAT_B8G8R8A8_UNORM;
-    }
-    // Advertise only formats the native CoreVideo compositor can wrap. RGBA
-    // IOSurfaces must fail at swapchain negotiation instead of rendering a
-    // silently black stream.
-    if (XR_FAILED(result) || !foundBgra || formats.size() != 2 ||
-        formats.front() != DXGI_FORMAT_B8G8R8A8_UNORM) {
+    // Both layouts reach the native compositor. Preserve BGRA preference.
+    const std::vector<int64_t> expectedFormats = {
+        DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_B8G8R8A8_UNORM_SRGB,
+        DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
+    };
+    if (XR_FAILED(result) || formats != expectedFormats) {
         xrDestroySession(session);
         release(context);
         release(device);
@@ -2008,8 +2191,7 @@ int main(int argc, char** argv) {
     swapchainInfo.type = XR_TYPE_SWAPCHAIN_CREATE_INFO;
     swapchainInfo.usageFlags =
         XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT | XR_SWAPCHAIN_USAGE_SAMPLED_BIT;
-    // BGRA is the CoreVideo/VideoToolbox-native layout the streamer encodes
-    // without conversion; RGBA must not be advertised by this compositor.
+    // BGRA remains the preferred CoreVideo/VideoToolbox-native layout.
     swapchainInfo.format = DXGI_FORMAT_B8G8R8A8_UNORM;
     swapchainInfo.sampleCount = 1;
     // The deterministic daemon uses tiny textures for fast pixel checks.
@@ -2023,39 +2205,70 @@ int main(int argc, char** argv) {
     swapchainInfo.arraySize = 1;
     swapchainInfo.mipCount = 1;
 
-    swapchainInfo.format = DXGI_FORMAT_R8G8B8A8_UNORM;
-    XrSwapchain rgbaSwapchain = XR_NULL_HANDLE;
-    result = xrCreateSwapchain(session, &swapchainInfo, &rgbaSwapchain);
+    swapchainInfo.format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+    XrSwapchain unsupportedSwapchain = XR_NULL_HANDLE;
+    result = xrCreateSwapchain(session, &swapchainInfo, &unsupportedSwapchain);
     if (result != XR_ERROR_SWAPCHAIN_FORMAT_UNSUPPORTED ||
-        rgbaSwapchain != XR_NULL_HANDLE) {
-        if (rgbaSwapchain != XR_NULL_HANDLE) {
-            xrDestroySwapchain(rgbaSwapchain);
+        unsupportedSwapchain != XR_NULL_HANDLE) {
+        if (unsupportedSwapchain != XR_NULL_HANDLE) {
+            xrDestroySwapchain(unsupportedSwapchain);
         }
         xrDestroySession(session);
         release(context);
         release(device);
         xrDestroyInstance(instance);
-        return fail("xrCreateSwapchain(unsupported RGBA transport)", result);
+        return fail("xrCreateSwapchain(unsupported float transport)", result);
     }
-    // UE4 hands over a typeless BGRA format for its eye textures; the runtime
-    // backs it with typed BGRA instead of rejecting the swapchain.
-    swapchainInfo.format = DXGI_FORMAT_B8G8R8A8_TYPELESS;
-    XrSwapchain typelessSwapchain = XR_NULL_HANDLE;
-    result = xrCreateSwapchain(session, &swapchainInfo, &typelessSwapchain);
-    if (XR_FAILED(result) || typelessSwapchain == XR_NULL_HANDLE) {
-        if (typelessSwapchain != XR_NULL_HANDLE) {
-            xrDestroySwapchain(typelessSwapchain);
+    // Typed RGBA and typeless requests from UE4/OpenComposite must create
+    // correctly typed D3D11 textures for the exported IOSurfaces.
+    for (DXGI_FORMAT requestedFormat : {
+             DXGI_FORMAT_B8G8R8A8_TYPELESS, DXGI_FORMAT_R8G8B8A8_TYPELESS,
+             DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R8G8B8A8_UNORM_SRGB}) {
+        swapchainInfo.format = requestedFormat;
+        XrSwapchain formatSwapchain = XR_NULL_HANDLE;
+        result = xrCreateSwapchain(session, &swapchainInfo, &formatSwapchain);
+        uint32_t imageCount = 0;
+        if (XR_SUCCEEDED(result) && formatSwapchain != XR_NULL_HANDLE) {
+            result = xrEnumerateSwapchainImages(formatSwapchain, 0, &imageCount, nullptr);
         }
-        xrDestroySession(session);
-        release(context);
-        release(device);
-        xrDestroyInstance(instance);
-        return fail("xrCreateSwapchain(B8G8R8A8_TYPELESS)", result);
+        std::vector<XrSwapchainImageD3D11KHR> images(imageCount);
+        for (auto& image : images) {
+            image.type = XR_TYPE_SWAPCHAIN_IMAGE_D3D11_KHR;
+        }
+        if (XR_SUCCEEDED(result) && imageCount > 0) {
+            result = xrEnumerateSwapchainImages(
+                formatSwapchain, imageCount, &imageCount,
+                reinterpret_cast<XrSwapchainImageBaseHeader*>(images.data()));
+        }
+        const DXGI_FORMAT expectedFormat = requestedFormat == DXGI_FORMAT_B8G8R8A8_TYPELESS
+            ? DXGI_FORMAT_B8G8R8A8_UNORM
+            : requestedFormat == DXGI_FORMAT_R8G8B8A8_TYPELESS
+                ? DXGI_FORMAT_R8G8B8A8_UNORM : requestedFormat;
+        bool valid = XR_SUCCEEDED(result) && imageCount > 0;
+        for (const auto& image : images) {
+            if (image.texture == nullptr) {
+                valid = false;
+                continue;
+            }
+            D3D11_TEXTURE2D_DESC description{};
+            image.texture->GetDesc(&description);
+            valid = valid && description.Format == expectedFormat;
+        }
+        if (formatSwapchain != XR_NULL_HANDLE) {
+            xrDestroySwapchain(formatSwapchain);
+        }
+        if (!valid) {
+            xrDestroySession(session);
+            release(context);
+            release(device);
+            xrDestroyInstance(instance);
+            return fail("xrCreateSwapchain(typed/typeless color format)", result);
+        }
     }
-    xrDestroySwapchain(typelessSwapchain);
 
     // A side-by-side image is wider than a single view (UE4 submits 2x1152),
     // so the per-view limit must not be applied to the swapchain image.
+    swapchainInfo.format = DXGI_FORMAT_B8G8R8A8_TYPELESS;
     const uint32_t viewWidth = swapchainInfo.width;
     swapchainInfo.width = 1700;
     XrSwapchain wideSwapchain = XR_NULL_HANDLE;

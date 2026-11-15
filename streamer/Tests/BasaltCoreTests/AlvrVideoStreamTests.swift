@@ -2,6 +2,45 @@ import XCTest
 @testable import BasaltCore
 
 final class AlvrVideoStreamTests: XCTestCase {
+    func testUninstallReleasesUDPPortAndIgnoresAnOldSender() throws {
+        let reservation = socket(AF_INET, SOCK_DGRAM, 0)
+        XCTAssertGreaterThanOrEqual(reservation, 0)
+        var address = sockaddr_in()
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_addr.s_addr = inet_addr("127.0.0.1")
+        XCTAssertEqual(withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                Darwin.bind(reservation, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
+        }, 0)
+        var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+        withUnsafeMutablePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                _ = getsockname(reservation, $0, &length)
+            }
+        }
+        let port = UInt16(bigEndian: address.sin_port)
+        close(reservation)
+        var sockets: [Int32] = [-1, -1]
+        XCTAssertEqual(socketpair(AF_UNIX, SOCK_STREAM, 0, &sockets), 0)
+        defer { close(sockets[1]) }
+        let control = AlvrSessionHandshakeResult(clientState: .standby,
+            negotiatedSettings: nil, streamReady: false, socket: sockets[0])
+        let router = AlvrVideoStreamRouter()
+        let old = try AlvrVideoStreamSender(host: "127.0.0.1", remotePort: 9999, localPort: port)
+        router.install(old, controlSession: control)
+        XCTAssertTrue(router.hasSender)
+        DispatchQueue.concurrentPerform(iterations: 8) { _ in router.uninstall(old) }
+        XCTAssertFalse(router.hasSender)
+        XCTAssertFalse(router.sendAudioPCM16(Data(repeating: 0, count: 4)))
+        let replacement = try AlvrVideoStreamSender(host: "127.0.0.1", remotePort: 9999, localPort: port)
+        router.install(replacement, controlSession: control)
+        router.uninstall(old)
+        XCTAssertTrue(router.hasSender)
+        router.uninstall(replacement)
+        XCTAssertFalse(router.hasSender)
+    }
     private static func appendLittleEndian<T: FixedWidthInteger>(_ value: T, to data: inout Data) {
         var value = value.littleEndian
         withUnsafeBytes(of: &value) { data.append(contentsOf: $0) }
@@ -242,6 +281,15 @@ final class AlvrVideoStreamTests: XCTestCase {
             XCTAssertGreaterThan(report.durationNanoseconds, 0)
             reportReceived.fulfill()
         }
+        let stalled = expectation(description: "silent USB forward is replaced")
+        stalled.assertForOverFulfill = true
+        sender.onError = { error in
+            XCTAssertTrue(error.localizedDescription.contains("tracking stalled"))
+            stalled.fulfill()
+        }
+        // Before the first tracking packet, readiness owns the timeout.
+        sender.checkTrackingLiveness(at: DispatchTime.now().uptimeNanoseconds
+            + AlvrVideoStreamSender.tcpTrackingTimeoutNanoseconds)
         sender.start()
         sender.send(annexB: Data([0, 0, 0, 1, 0x65]),
                     timestampNanoseconds: 1, isIDR: true)
@@ -278,6 +326,14 @@ final class AlvrVideoStreamTests: XCTestCase {
         XCTAssertEqual(videoTimestamp, questTimestamp)
         XCTAssertEqual(sender.timestampForVideoFrame(), questTimestamp)
         wait(for: [reportReceived], timeout: 1)
+
+        sender.checkTrackingLiveness(at: DispatchTime.now().uptimeNanoseconds
+            + AlvrVideoStreamSender.tcpTrackingTimeoutNanoseconds)
+        wait(for: [stalled], timeout: 1)
+        sender.checkTrackingLiveness(at: DispatchTime.now().uptimeNanoseconds
+            + AlvrVideoStreamSender.tcpTrackingTimeoutNanoseconds)
+        XCTAssertFalse(sender.send(annexB: Data([0, 0, 0, 1, 0x41]),
+                                   timestampNanoseconds: 2, isIDR: false))
     }
 
     func testWiredBufferPolicyCanHoldAnIDRWithoutGrowingUDPQueue() {
@@ -390,6 +446,75 @@ final class AlvrVideoStreamTests: XCTestCase {
             timestampNanoseconds: 1, isIDR: false))
     }
 
+    func testWiredUplinkDoesNotKeepTheBytesItHasRead() throws {
+        let listener = socket(AF_INET, SOCK_STREAM, 0)
+        XCTAssertGreaterThanOrEqual(listener, 0)
+        defer { close(listener) }
+
+        var address = sockaddr_in()
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = 0
+        address.sin_addr.s_addr = inet_addr("127.0.0.1")
+        let bindResult = withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                Darwin.bind(listener, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
+        }
+        XCTAssertEqual(bindResult, 0)
+        XCTAssertEqual(listen(listener, 1), 0)
+        var bound = sockaddr_in()
+        var boundSize = socklen_t(MemoryLayout<sockaddr_in>.size)
+        withUnsafeMutablePointer(to: &bound) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                _ = getsockname(listener, $0, &boundSize)
+            }
+        }
+
+        let sender = try AlvrVideoStreamSender(
+            host: "127.0.0.1", remotePort: UInt16(bigEndian: bound.sin_port),
+            localPort: 0, transport: .tcp)
+        let peer = accept(listener, nil, nil)
+        XCTAssertGreaterThanOrEqual(peer, 0)
+        defer { close(peer) }
+        sender.start()
+
+        // 24 MiB of valid packets on a stream the sender ignores, then one
+        // tracking packet to tell when it got through them.
+        let filler = Self.uplinkDatagram(streamID: 0xffff, payload: Data(count: 256 * 1_024))
+        let fillerCount = 96
+        let tracking = Self.uplinkDatagram(
+            streamID: 0, payload: Self.duration(seconds: 12, nanoseconds: 345))
+        let inUseBefore = Self.mallocBytesInUse()
+        for packet in Array(repeating: filler, count: fillerCount) + [tracking] {
+            var sent = 0
+            while sent < packet.count {
+                let count = packet.withUnsafeBytes {
+                    Darwin.send(peer, $0.baseAddress! + sent, packet.count - sent, 0)
+                }
+                guard count > 0 else { return XCTFail("send failed: \(errno)") }
+                sent += count
+            }
+        }
+        let deadline = Date().addingTimeInterval(10)
+        var videoTimestamp: UInt64?
+        while videoTimestamp == nil, Date() < deadline {
+            videoTimestamp = sender.timestampForVideoFrame()
+            usleep(1_000)
+        }
+        XCTAssertEqual(videoTimestamp, 12_000_000_345)
+
+        // At most one unfinished packet may stay buffered, never the history.
+        XCTAssertLessThan(Self.mallocBytesInUse() - inUseBefore, 4 * 1_024 * 1_024,
+                          "after receiving \(fillerCount * filler.count) bytes")
+    }
+
+    private static func mallocBytesInUse() -> Int {
+        var statistics = malloc_statistics_t()
+        malloc_zone_statistics(nil, &statistics)
+        return statistics.size_in_use
+    }
+
     func testUplinkIsNotReadUntilStarted() throws {
         let receiver = socket(AF_INET, SOCK_DGRAM, 0)
         XCTAssertGreaterThanOrEqual(receiver, 0)
@@ -446,6 +571,9 @@ final class AlvrVideoStreamTests: XCTestCase {
         XCTAssertNil(sender.timestampForVideoFrame())
 
         // Handlers are installed; the queued datagram is read on start.
+        let stillSending = expectation(description: "UDP ignores USB tracking deadline")
+        sender.onError = { error in XCTFail("UDP watchdog changed behavior: \(error)") }
+        sender.onFrameSent = { _ in stillSending.fulfill() }
         sender.start()
         let deadline = Date().addingTimeInterval(1)
         var videoTimestamp: UInt64?
@@ -454,6 +582,11 @@ final class AlvrVideoStreamTests: XCTestCase {
             usleep(1_000)
         }
         XCTAssertEqual(videoTimestamp, 3_000_000_000)
+        sender.checkTrackingLiveness(at: DispatchTime.now().uptimeNanoseconds
+            + AlvrVideoStreamSender.tcpTrackingTimeoutNanoseconds)
+        XCTAssertTrue(sender.send(annexB: Data([0, 0, 0, 1, 0x41]),
+                                   timestampNanoseconds: 3_000_000_000, isIDR: false))
+        wait(for: [stillSending], timeout: 1)
     }
 
     private func readExactly(_ count: Int, from socket: Int32) throws -> Data {

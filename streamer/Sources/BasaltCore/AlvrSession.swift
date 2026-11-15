@@ -36,6 +36,12 @@ public struct AlvrNegotiatedSettings: Equatable, Sendable {
                      latencyPreset: latencyPreset)
     }
 
+    /// The lowest rate a headset may advertise. The list comes from the
+    /// network peer, and the frame pacing divides by the chosen rate, so a
+    /// near-zero entry must not be picked. No supported headset goes below
+    /// 60 Hz: Quest 2 lists 60/72/80/90/120, Quest 3 72/80/90/120.
+    static let minimumRefreshRate: Float = 60
+
     private static func defaults(for capabilities: AlvrVideoCapabilities,
                                  requestedWidth: UInt32, requestedHeight: UInt32,
                                  preferredRefreshRate: Float,
@@ -62,7 +68,9 @@ public struct AlvrNegotiatedSettings: Equatable, Sendable {
             throw BasaltError("Requested per-eye resolution \(requestedWidth)x\(requestedHeight) exceeds "
                               + "the headset maximum \(capabilities.width)x\(capabilities.height)")
         }
-        let validRates = capabilities.refreshRates.filter { $0.isFinite && $0 > 0 && $0 <= 240 }
+        let validRates = capabilities.refreshRates.filter {
+            $0.isFinite && $0 >= Self.minimumRefreshRate && $0 <= 240
+        }
         guard !validRates.isEmpty else { throw BasaltError("Headset refresh rates are invalid") }
         let refreshRate = validRates.min {
             abs($0 - preferredRefreshRate) < abs($1 - preferredRefreshRate)
@@ -105,18 +113,29 @@ public struct AlvrNegotiatedSettings: Equatable, Sendable {
 /// Encodes ALVR v20's bincode `StreamConfigPacket`: two UTF-8 strings,
 /// each represented by a little-endian u64 byte length followed by bytes.
 public enum AlvrStreamConfigEncoder {
-    public static func payload(settings: AlvrNegotiatedSettings, wired: Bool = false) throws -> Data {
+    public static func payload(settings: AlvrNegotiatedSettings, wired: Bool = false,
+                               questSupersampling: QuestPostProcessingLevel = .off,
+                               questSharpening: QuestPostProcessingLevel = .off) throws -> Data {
         // ALVR v20's fuzzy merge requires the session_settings key. These
         // values come from the selected, explicit latency preset; balanced is
         // the validated baseline and low trims only 0.2 buffered frame.
-        let sessionObject: [String: Any] = [
-            "session_settings": [
-                "video": [
-                    "max_buffering_frames": settings.maximumBufferingFrames,
-                    "buffering_history_weight": settings.bufferingHistoryWeight,
-                ],
-            ],
+        var video: [String: Any] = [
+            "max_buffering_frames": settings.maximumBufferingFrames,
+            "buffering_history_weight": settings.bufferingHistoryWeight,
         ]
+        if questSupersampling != .off || questSharpening != .off {
+            // v20.14.1: alvr/session/src/{settings,lib}.rs. The fuzzy merge
+            // accepts SwitchDefault + choice objects here. Specify BOTH choices:
+            // omitting one would inherit ALVR's Quality default for that effect.
+            video["clientside_post_processing"] = [
+                "enabled": true,
+                "content": [
+                    "super_sampling": ["variant": questSupersampling.alvrVariant],
+                    "sharpening": ["variant": questSharpening.alvrVariant],
+                ],
+            ]
+        }
+        let sessionObject: [String: Any] = ["session_settings": ["video": video]]
         let session = try JSONSerialization.data(withJSONObject: sessionObject,
                                                   options: [.sortedKeys])
         let negotiatedObject: [String: Any] = [
@@ -139,8 +158,12 @@ public enum AlvrStreamConfigEncoder {
     }
 
     public static func framedPacket(settings: AlvrNegotiatedSettings,
-                                    wired: Bool = false) throws -> Data {
-        let payload = try payload(settings: settings, wired: wired)
+                                    wired: Bool = false,
+                                    questSupersampling: QuestPostProcessingLevel = .off,
+                                    questSharpening: QuestPostProcessingLevel = .off) throws -> Data {
+        let payload = try payload(settings: settings, wired: wired,
+                                  questSupersampling: questSupersampling,
+                                  questSharpening: questSharpening)
         guard payload.count <= AlvrControlProbe.maximumPacketBytes else {
             throw BasaltError("ALVR stream configuration is too large")
         }

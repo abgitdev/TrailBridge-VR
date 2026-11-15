@@ -13,9 +13,8 @@ streamer/streamer-out
 
 runtime/build*/
 
-dist/
-release/
 packaging/*.iconset/
+/packaging/icon/.build/
 
 # Personal editor state, local secrets, and logs.
 .idea/
@@ -23,3 +22,59 @@ xcuserdata/
 .env
 .env.*
 *.log
+
+# Local workspace and personal files.
+/.local/
+AGENTS.md
+HANDOFF.md
+CLAUDE.md
+STATUS.md
+MEMORY.md
+.mcp.json
+.codex/
+.claude/
+backups/
+diagnostics/
+logs/
+notes/
+reports/
+research/
+audits/
+chats/
+transcripts/
+screenshots/
+secrets/
+local-config/
+*.local
+*.local.*
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+.netrc
+.envrc
+credentials.json
+Screenshot *.png
+*.ips
+*.crash
+*.dmp
+
+# Keep installed games, Wine prefixes, vendor binaries, and packages out of Git.
+drive_c/
+steamapps/
+*.sav
+*.acf
+*.vdf
+*.reg
+*.exe
+*.dll
+*.dylib
+*.so
+*.app/
+*.apk
+*.dmg
+*.pkg
+*.xcarchive/
+*.xcresult/

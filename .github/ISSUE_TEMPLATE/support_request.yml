@@ -1,5 +1,5 @@
 name: Setup or help request
-description: Ask for help with the documented BasaltVR setup
+description: Ask for help with the documented TrailBridge VR setup
 title: "[Help]: "
 labels:
   - question
@@ -7,14 +7,14 @@ body:
   - type: markdown
     attributes:
       value: |
-        BasaltVR is an experimental developer preview. Please search existing issues and read
+        TrailBridge VR is an experimental project. Please search existing issues and read
         SUPPORT.md before submitting. Sanitize usernames, device IDs, credentials, and captured
         content from all logs.
   - type: input
     id: version
     attributes:
       label: Version or commit
-      placeholder: v0.1.0 or commit SHA
+      placeholder: commit SHA
     validations:
       required: true
   - type: textarea

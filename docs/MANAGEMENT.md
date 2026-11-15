@@ -1,6 +1,6 @@
 # BasaltVR management app
 
-The M7 developer-preview app is a native macOS SwiftUI executable in the existing `streamer` package.
+The management app is a native macOS SwiftUI executable in the existing `streamer` package.
 It is intentionally a thin front end over `BasaltBottleKit` and `BasaltCore`: bottles, profiles,
 stream settings, and safety validation have one implementation shared with the command-line tools.
 
@@ -27,9 +27,10 @@ Sections are also on ⌘1–⌘5, ⌘R rescans, ⌘. stops the active session, a
 shows the session state with a Stop button.
 
 1. **Setup** checks Apple Silicon and macOS 14, adb, the pinned Wine/DXMT engine, the built OpenXR
-   runtime, optional Screen Recording permission, and optional BlackHole audio. The adb and
-   BlackHole actions use an existing Homebrew installation. Build-related actions open the M5
-   instructions because compiling the pinned runtime is still a developer operation.
+   runtime, optional Screen Recording permission, and optional BlackHole audio. The adb action
+   opens the Headset page, which downloads Google's platform tools, and the BlackHole action
+   downloads BlackHole's official installer. Build-related actions open the bottle guide because
+   compiling the pinned runtime is a developer operation.
 2. **Bottles** shows Basalt-managed prefixes alongside installed Whisky and CrossOver bottles.
    External prefixes are read-only. **Copy into Basalt** creates an isolated pinned-engine bottle,
    APFS-clones the existing prefix without changing its source, and runs Wine's prefix update.
@@ -59,7 +60,7 @@ shows the session state with a Stop button.
    games do not. It is the same profile as `basaltctl profile add`.
 4. **Profiles** can edit their source, Windows executable, working directory, arguments, and
    environment, or be deleted without removing the game. OpenComposite installation is available
-   from the profile editor while keeping the separately supplied DLL inside the managed prefix.
+   from More → OpenVR Support… or the profile editor, with the game DLL inside the managed prefix.
 5. **Play** (from a game tile, or the Stream page's game picker) starts wired or Wi-Fi ALVR with the selected FPS, bitrate, resolution, latency preset,
    and optional audio input. When audio is enabled, the streamer temporarily routes default
    application output to that loopback and restores the prior output on shutdown. Once the
@@ -87,21 +88,24 @@ shows the session state with a Stop button.
    and host names, Mac host names, IP and MAC addresses, and long hex tokens are replaced before
    anything is shown, and profile environment values are never included. Nothing is uploaded.
 
-Generic non-Steam executable scanning outside managed prefixes, online metadata/artwork, a
-Developer ID-signed and notarized `.app` bundle, and a clean-user-account/live-Quest acceptance
-run remain for later M7 work.
-OpenComposite continues to be user-supplied and is never downloaded or redistributed by this app.
+OpenComposite is a separate GPL-3.0 project by its authors, never bundled with TrailBridge.
+Library → More → OpenVR Support… (also in Edit Launch Profile…) finds game DLLs inside the
+profile’s managed game folder. Choose a target if several exist, then Download Official Build…
+to confirm a download from the official OpenComposite site, or Choose File… to supply a DLL.
+The app verifies the PE architecture and shows the file size and SHA-256 before installation.
+Uninstall OpenVR Support restores the original DLL and removes only BasaltVR-generated configuration.
 
-The GitHub developer-preview archive contains an ad-hoc-signed app, not a notarized consumer
-installer. It does not bundle third-party Wine binaries. Developers can create a local preview
-archive with:
+TrailBridge VR is published as a DMG. The app in it is signed ad hoc, not with an Apple Developer
+ID, and is not notarized. It holds the OpenXR runtime and the DXMT fork and no Wine: the app
+downloads the pinned Wine build when it is first set up. Developers build the DMG with:
 
 ```sh
-packaging/build-release.zsh 0.1.0
+make release    # runs packaging/build-dmg.zsh
 ```
 
-The packager includes Basalt runtime and DXMT artifacts when they exist in the ignored build tree,
-and records exactly what was included in the archive.
+The packager builds the OpenXR runtime from the current sources, takes the DXMT fork from the
+ignored build tree and writes the DMG and its SHA-256 to `.local/dist`. It stops when a file in
+the app still holds a build path or a name that identifies the Mac or its owner.
 
 ## Tests
 

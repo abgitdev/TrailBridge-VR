@@ -4,7 +4,10 @@ import BasaltBottleKit
 import BasaltCore
 
 final class DiagnosticsTests: XCTestCase {
-    private let redactor = DiagnosticRedactor(homeDirectory: "/Users/ada/", userName: "ada")
+    /// Nothing is read from the Mac the tests run on.
+    private let redactor = DiagnosticRedactor(
+        homeDirectory: "/Users/ada/", userName: "ada", dataFolder: nil, appFolder: nil,
+        hostNames: [], volumeNames: [])
 
     func testRedactsHomeFolderAndWineUserPaths() {
         XCTAssertEqual(
@@ -13,17 +16,18 @@ final class DiagnosticsTests: XCTestCase {
         XCTAssertEqual(redactor.redact("cd /Users/ada"), "cd ~")
         XCTAssertEqual(
             redactor.redact(#"C:\users\ada\AppData\Local\Programs\bs-manager"#),
-            #"C:\users\<user>\AppData\Local\Programs\bs-manager"#)
+            #"C:\users\[user]\AppData\Local\Programs\bs-manager"#)
         XCTAssertEqual(
             redactor.redact("prefix/drive_c/users/Ada/Documents"),
-            "prefix/drive_c/users/<user>/Documents")
+            "prefix/drive_c/users/[user]/Documents")
         // JSON escapes Windows backslashes.
         XCTAssertEqual(
             redactor.redact(#""C:\\users\\ada\\AppData""#),
-            #""C:\\users\\<user>\\AppData""#)
-        // Only whole path components are names.
-        XCTAssertEqual(redactor.redact("/Users/adam/file"), "/Users/adam/file")
-        XCTAssertEqual(redactor.redact("drive_c/users/adam"), "drive_c/users/adam")
+            #""C:\\users\\[user]\\AppData""#)
+        // Only whole path components are the home folder; another account
+        // is still somebody's name.
+        XCTAssertEqual(redactor.redact("/Users/adam/file"), "/Users/[user]/file")
+        XCTAssertEqual(redactor.redact("drive_c/users/adam"), "drive_c/users/[user]")
     }
 
     func testRedactsNetworkAndDeviceIdentifiers() {
@@ -31,28 +35,28 @@ final class DiagnosticsTests: XCTestCase {
             + "(fe80::1c2b:3aff:fe4d:5e6f%en0, aa:bb:cc:dd:ee:ff)"
         XCTAssertEqual(
             redactor.redact(line),
-            "ALVR headset '<headset>.client.alvr' announced itself from <ipv4> "
-                + "(<ipv6>, <mac>)")
+            "ALVR headset '[headset].client.alvr' announced itself from [ipv4] "
+                + "([ipv6], [mac])")
         XCTAssertEqual(
             redactor.redact("USB Quest TESTQUEST00042 is authorized; adb control/video forwards are ready."),
-            "USB Quest <serial> is authorized; adb control/video forwards are ready.")
+            "USB Quest [serial] is authorized; adb control/video forwards are ready.")
         XCTAssertEqual(
             redactor.redact("adb-TESTQUEST00042-AbCdEf._adb-tls-connect._tcp"),
-            "adb-<serial>-AbCdEf._adb-tls-connect._tcp")
-        XCTAssertEqual(redactor.redact("Adas-MacBook-Pro.local:9943"), "<host>.local:9943")
-        XCTAssertEqual(redactor.redact("mail ada@example.com now"), "mail <email> now")
-        XCTAssertEqual(redactor.redact("owner 76561198012345678"), "owner <steamid>")
-        XCTAssertEqual(redactor.redact("SetSteamID( [U:1:12345678] )"), "SetSteamID( <steamid> )")
+            "adb-[serial]-AbCdEf._adb-tls-connect._tcp")
+        XCTAssertEqual(redactor.redact("Adas-MacBook-Pro.local:9943"), "[host].local:9943")
+        XCTAssertEqual(redactor.redact("mail ada@example.com now"), "mail [email] now")
+        XCTAssertEqual(redactor.redact("owner 76561198012345678"), "owner [steamid]")
+        XCTAssertEqual(redactor.redact("SetSteamID( [U:1:12345678] )"), "SetSteamID( [steamid] )")
         XCTAssertEqual(
-            redactor.redact("token 0123456789abcdef0123456789abcdef ok"), "token <token> ok")
-        XCTAssertEqual(redactor.redact(#"AccountName="ada_plays" ok"#), #"AccountName="<redacted>" ok"#)
-        XCTAssertEqual(redactor.redact("serial: R3CN90ABCDE"), "serial: <redacted>")
+            redactor.redact("token 0123456789abcdef0123456789abcdef ok"), "token [token] ok")
+        XCTAssertEqual(redactor.redact(#"AccountName="ada_plays" ok"#), #"AccountName="[redacted]" ok"#)
+        XCTAssertEqual(redactor.redact("serial: R3CN90ABCDE"), "serial: [redacted]")
         // Inside rendered JSON: the string's own closing quote, escaped
         // quotes, and escape sequences survive.
-        XCTAssertEqual(redactor.redact(#"["account=ada"]"#), #"["account=<redacted>"]"#)
-        XCTAssertEqual(redactor.redact(#""login=\"ada\" ok""#), #""login=\"<redacted>\" ok""#)
-        XCTAssertEqual(redactor.redact(#""username=ada\nnext""#), #""username=<redacted>\nnext""#)
-        XCTAssertEqual(redactor.redact(#""login=CORP\\ada""#), #""login=<redacted>""#)
+        XCTAssertEqual(redactor.redact(#"["account=ada"]"#), #"["account=[redacted]"]"#)
+        XCTAssertEqual(redactor.redact(#""login=\"ada\" ok""#), #""login=\"[redacted]\" ok""#)
+        XCTAssertEqual(redactor.redact(#""username=ada\nnext""#), #""username=[redacted]\nnext""#)
+        XCTAssertEqual(redactor.redact(#""login=CORP\\ada""#), #""login=[redacted]""#)
     }
 
     func testKeepsOrdinaryDiagnosticText() {
@@ -95,7 +99,7 @@ final class DiagnosticsTests: XCTestCase {
         XCTAssertTrue(markdown.contains("- beat-saber-vr: Wireless (Wi-Fi) · 90 fps"))
         XCTAssertTrue(markdown.contains("failed: Steam is open but not signed in."))
         XCTAssertTrue(markdown.contains("````text"), "fence must outlast the log's own backticks")
-        XCTAssertTrue(markdown.contains("USB Quest <serial> is authorized"))
+        XCTAssertTrue(markdown.contains("USB Quest [serial] is authorized"))
         XCTAssertFalse(markdown.contains("\u{1B}"))
         for leaked in ["/Users/ada", #"\ada"#, "users/ada"] {
             XCTAssertFalse(markdown.contains(leaked), markdown)
@@ -127,8 +131,93 @@ final class DiagnosticsTests: XCTestCase {
             XCTAssertFalse(text.contains("BlackHole 2ch"), text)
         }
         XCTAssertTrue(markdown.contains("· audio BlackHole"))
-        XCTAssertTrue(markdown.contains("· audio <audio device>"))
-        XCTAssertTrue(markdown.contains("Game audio output routed to <audio device> for this session"))
+        XCTAssertTrue(markdown.contains("· audio [audio device]"))
+        XCTAssertTrue(markdown.contains("Game audio output routed to [audio device] for this session"))
+    }
+
+    /// The streamer's own lines are recognised as plain text, before JSON
+    /// escaping or a Markdown table wraps them.
+    func testReportExportsRedactStreamerLinesAndWineStringsInBothFormats() throws {
+        let report = makeReport(
+            log: """
+                0024:fixme:module:load_dll L"C:\\\\users\\\\ada\\\\AppData\\\\Local\\\\Temp\\\\x.dll"
+                ALVR control accepted by 'Ada's Quest 3': StreamConfig sent, StartStream sent, and Quest replied StreamReady.
+                Restored Mac audio output to Ada's 27" Display
+
+                """,
+            failureReason: "No CoreAudio input device contains 'BlackHole 2ch'; "
+                + "available: MacBook Pro Microphone, Ada's iPhone Microphone")
+        let markdown = report.markdown(redactedWith: redactor)
+        let json = try report.json(redactedWith: redactor)
+        for text in [markdown, json] {
+            for leaked in ["ada\\", "Ada's", "iPhone", "Display", "MacBook Pro Microphone", "BlackHole 2ch"] {
+                XCTAssertFalse(text.contains(leaked), "\(leaked) in \(text)")
+            }
+        }
+        XCTAssertTrue(markdown.contains(#"load_dll L"C:\\users\\[user]\\AppData\\Local\\Temp\\x.dll""#), markdown)
+        XCTAssertTrue(markdown.contains("\nRestored Mac audio output to [audio device]\n"), markdown)
+        // The failed session is still one table row with all its cells.
+        let row = try XCTUnwrap(markdown.components(separatedBy: "\n").first { $0.contains("failed:") })
+        XCTAssertTrue(row.contains(
+            "| failed: No CoreAudio input device contains 'BlackHole'; "
+                + "available: [audio device], [audio device] | no reports |"), row)
+
+        let object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+        XCTAssertEqual(object["logTail"] as? [String], [
+            #"0024:fixme:module:load_dll L"C:\\users\\[user]\\AppData\\Local\\Temp\\x.dll""#,
+            "ALVR control accepted by '[headset]': StreamConfig sent, StartStream sent, "
+                + "and Quest replied StreamReady.",
+            "Restored Mac audio output to [audio device]",
+        ])
+        let sessions = try XCTUnwrap(object["recentSessions"] as? [[String: Any]])
+        XCTAssertEqual(
+            sessions.first?["failureReason"] as? String,
+            "No CoreAudio input device contains 'BlackHole'; available: [audio device], [audio device]")
+    }
+
+    func testReportRedactsPathsOnAnExternalDisk() throws {
+        let root = "/Volumes/Ada Lovelace SSD/TrailBridge"
+        let report = makeReport(log: "wine: '\(root)/data/Bottles/vr/prefix' is ready\n", root: root)
+        let external = DiagnosticRedactor(
+            homeDirectory: "/Users/ada", userName: "ada", dataFolder: root + "/data",
+            appFolder: root, hostNames: [], volumeNames: [])
+        let markdown = report.markdown(redactedWith: external)
+        let json = try report.json(redactedWith: external)
+        for text in [markdown, json] {
+            XCTAssertFalse(text.contains("Lovelace"), text)
+            XCTAssertFalse(text.contains("/Volumes/"), text)
+        }
+        XCTAssertTrue(markdown.contains("**OpenXR runtime** — [app folder]/runtime/build/bin/basalt_openxr.dll"))
+        XCTAssertTrue(markdown.contains("wine: '[data folder]/Bottles/vr/prefix' is ready"))
+        let object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+        let bottles = try XCTUnwrap(object["bottles"] as? [[String: Any]])
+        XCTAssertEqual(bottles.first?["prefix"] as? String, "[data folder]/Bottles/vr/prefix")
+    }
+
+    func testReportLeavesOutCredentialArguments() throws {
+        let report = makeReport(log: nil, arguments: [
+            "-login", "ada_plays", "hunter2", "-applaunch", "620980",
+            "--password=hunter3", "+connect", "play.example.org",
+        ])
+        let markdown = report.markdown(redactedWith: redactor)
+        let json = try report.json(redactedWith: redactor)
+        for text in [markdown, json] {
+            for leaked in ["ada_plays", "hunter2", "hunter3"] {
+                XCTAssertFalse(text.contains(leaked), text)
+            }
+        }
+        XCTAssertTrue(markdown.contains(
+            "steam.exe -login [redacted] [redacted] -applaunch 620980 "
+                + "--password=[redacted] +connect play.example.org |"), markdown)
+        let object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+        let profiles = try XCTUnwrap(object["profiles"] as? [[String: Any]])
+        XCTAssertEqual(profiles.first?["arguments"] as? [String], [
+            "-login", "[redacted]", "[redacted]", "-applaunch", "620980",
+            "--password=[redacted]", "+connect", "play.example.org",
+        ])
     }
 
     func testReportCanLeaveOutTheLog() {
@@ -194,8 +283,11 @@ final class DiagnosticsTests: XCTestCase {
     }
 
     private func makeReport(log: String?, audioDevice: String? = nil,
-                            defaultAudioDevice: String? = nil) -> DiagnosticReport {
-        let engineRoot = URL(fileURLWithPath: "/Users/ada/BasaltVR/runtime/build/wine")
+                            defaultAudioDevice: String? = nil,
+                            failureReason: String = "Steam is open but not signed in.",
+                            arguments: [String] = ["-applaunch", "620980"],
+                            root: String = "/Users/ada/BasaltVR") -> DiagnosticReport {
+        let engineRoot = URL(fileURLWithPath: root + "/runtime/build/wine")
         let engine = BottleEngine(
             id: "pinned-wine", kind: .pinned,
             wineBinary: engineRoot.appendingPathComponent("bin/wine"),
@@ -203,7 +295,9 @@ final class DiagnosticsTests: XCTestCase {
             root: engineRoot, supportsBasaltDXMT: true)
         var managed = ManagedBottle(
             name: "vr", engine: engine,
-            prefix: URL(fileURLWithPath: "/Users/ada/Library/Application Support/BasaltVR/Bottles/vr/prefix"),
+            prefix: URL(fileURLWithPath: root == "/Users/ada/BasaltVR"
+                ? "/Users/ada/Library/Application Support/BasaltVR/Bottles/vr/prefix"
+                : root + "/data/Bottles/vr/prefix"),
             engineRoot: engineRoot, wineBinary: engine.wineBinary)
         managed.dxmtInstalled = true
         let bottle = DiscoveredBottle(
@@ -212,20 +306,20 @@ final class DiagnosticsTests: XCTestCase {
         let profile = LaunchProfile(
             name: "beat-saber-vr", bottleName: "vr", source: .steam,
             executable: #"C:\Program Files (x86)\Steam\steam.exe"#,
-            arguments: ["-applaunch", "620980"],
+            arguments: arguments,
             environment: ["SteamAppId": "620980"])
         var custom = StreamLaunchSettings()
         custom.connection = .wifi
         custom.fps = 90
-        custom.audioDeviceName = audioDevice
+        custom.gameAudioChoice = audioDevice.map(GameAudioChoice.device) ?? .off
         var defaults = StreamLaunchSettings()
-        defaults.audioDeviceName = defaultAudioDevice
+        defaults.gameAudioChoice = defaultAudioDevice.map(GameAudioChoice.device) ?? .off
         var failed = SessionRecord(
             profileName: "beat-saber-vr", settings: custom,
             startedAt: Date(timeIntervalSince1970: 1_800_000_000))
         failed.endedAt = failed.startedAt.addingTimeInterval(30)
         failed.outcome = .failed
-        failed.failureReason = "Steam is open but not signed in."
+        failed.failureReason = failureReason
 
         return DiagnosticReport(
             generatedAt: Date(timeIntervalSince1970: 1_800_000_100),
@@ -236,7 +330,7 @@ final class DiagnosticsTests: XCTestCase {
                 processorCount: 14, thermalState: "nominal", lowPowerMode: false),
             setupChecks: [
                 SetupCheck(id: "runtime", title: "OpenXR runtime",
-                           detail: "/Users/ada/BasaltVR/runtime/build/bin/basalt_openxr.dll",
+                           detail: root + "/runtime/build/bin/basalt_openxr.dll",
                            status: .ready, required: true),
                 SetupCheck(id: "adb", title: "Android Platform Tools",
                            detail: "Optional for wireless", status: .actionNeeded,

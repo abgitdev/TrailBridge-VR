@@ -1,0 +1,11 @@
+diff --git a/src/util/sha1/sha1_util.hpp b/src/util/sha1/sha1_util.hpp
+--- a/src/util/sha1/sha1_util.hpp
++++ b/src/util/sha1/sha1_util.hpp
+@@ -11,6 +11,7 @@
+ #pragma once
+ 
+ #include <cstdint>
+ #include <cstring>
++#include <functional>
+ #include <string>
+ #include "./sha1.h"

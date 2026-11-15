@@ -103,4 +103,106 @@ final class DiscoveryTests: XCTestCase {
         XCTAssertEqual(reports.first?.0.hostname, "1234.client.alvr")
         XCTAssertEqual(reports.first?.1, "127.0.0.1")
     }
+
+    func testTrustFileFiltersDiscoveryBeforeOfferingAConnection() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("DiscoveryTrust-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = HeadsetTrustStore(file: root.appendingPathComponent("trusted.json"))
+        try store.prepare()
+        let requested = expectation(description: "unknown requested once")
+        let connected = expectation(description: "approved next beacon")
+        let lock = NSLock()
+        var requests = 0, connections = 0
+        let listener = try AlvrDiscoveryListener(port: 0, repeatInterval: 0, trustFile: store.file, onRequest: { line in
+            XCTAssertEqual(line, "Headset request: test.client.alvr at 127.0.0.1")
+            lock.lock(); requests += 1; lock.unlock()
+            requested.fulfill()
+        }) { _, _ in
+            lock.lock(); connections += 1; lock.unlock()
+            connected.fulfill()
+        }
+        defer { listener.stop() }
+        let sender = socket(AF_INET, SOCK_DGRAM, 0)
+        XCTAssertGreaterThanOrEqual(sender, 0)
+        defer { close(sender) }
+        var destination = sockaddr_in()
+        destination.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        destination.sin_family = sa_family_t(AF_INET)
+        destination.sin_port = listener.boundPort.bigEndian
+        destination.sin_addr.s_addr = inet_addr("127.0.0.1")
+        func sendBeacon() {
+            let packet = beacon(hostname: "test.client.alvr")
+            packet.withUnsafeBytes { bytes in
+                withUnsafePointer(to: &destination) {
+                    $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                        XCTAssertEqual(sendto(sender, bytes.baseAddress, packet.count, 0, $0,
+                                              socklen_t(MemoryLayout<sockaddr_in>.size)), packet.count)
+                    }
+                }
+            }
+        }
+        sendBeacon(); sendBeacon()
+        wait(for: [requested], timeout: 2)
+        Thread.sleep(forTimeInterval: 0.05)
+        lock.lock(); let beforeApproval = connections; lock.unlock()
+        XCTAssertEqual(beforeApproval, 0)
+        try store.setTrusted("test.client.alvr", trusted: true)
+        sendBeacon()
+        wait(for: [connected], timeout: 2)
+        try store.setTrusted("test.client.alvr", trusted: false)
+        sendBeacon()
+        Thread.sleep(forTimeInterval: 0.05)
+        lock.lock(); let finalConnections = connections; let finalRequests = requests; lock.unlock()
+        XCTAssertEqual(finalConnections, 1)
+        XCTAssertEqual(finalRequests, 1)
+    }
+
+    func testBusyDiscoveryPortIsReportedWithThePortAndItsCause() throws {
+        // A socket without SO_REUSEADDR holds the port against the listener.
+        let holder = socket(AF_INET, SOCK_DGRAM, 0)
+        XCTAssertGreaterThanOrEqual(holder, 0)
+        defer { close(holder) }
+        var address = sockaddr_in()
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_addr.s_addr = INADDR_ANY
+        XCTAssertEqual(withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                Darwin.bind(holder, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
+        }, 0)
+        var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+        withUnsafeMutablePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                _ = getsockname(holder, $0, &length)
+            }
+        }
+        let port = UInt16(bigEndian: address.sin_port)
+        XCTAssertThrowsError(try AlvrDiscoveryListener(port: port) { _, _ in }) { error in
+            XCTAssertEqual(error.localizedDescription,
+                           "Cannot bind UDP port \(port) for discovery: another program is using "
+                           + "this port (ALVR, MoltenVR or a second streamer?); quit it and try again")
+        }
+    }
+
+    func testRecentClientTableIsBoundedAndForgetsExpiredEntries() {
+        var recent = RecentBeaconClients()
+        let start = Date(timeIntervalSince1970: 1_000)
+        XCTAssertTrue(recent.shouldOffer("quest@192.0.2.1", at: start, repeatInterval: 5))
+        XCTAssertFalse(recent.shouldOffer("quest@192.0.2.1", at: start + 4.9, repeatInterval: 5))
+        XCTAssertTrue(recent.shouldOffer("quest@192.0.2.1", at: start + 5, repeatInterval: 5))
+
+        // One trusted name from ever new addresses: the table stops at its
+        // capacity instead of keeping every address.
+        var offered = 0
+        for index in 0..<10_000 where recent.shouldOffer(
+            "quest@198.51.\(index / 256).\(index % 256)", at: start + 6, repeatInterval: 5) {
+            offered += 1
+        }
+        XCTAssertEqual(recent.count, RecentBeaconClients.capacity)
+        XCTAssertEqual(offered, RecentBeaconClients.capacity - 1)
+        // Once their interval is over the old entries make room.
+        XCTAssertTrue(recent.shouldOffer("quest@203.0.113.9", at: start + 12, repeatInterval: 5))
+        XCTAssertEqual(recent.count, 1)
+    }
 }

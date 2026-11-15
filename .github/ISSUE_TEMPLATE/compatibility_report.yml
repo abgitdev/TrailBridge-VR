@@ -1,5 +1,5 @@
 name: Compatibility report
-description: Record a working or failing BasaltVR hardware/software combination
+description: Record a working or failing TrailBridge VR hardware/software combination
 title: "[Compatibility]: "
 labels:
   - compatibility
@@ -17,7 +17,7 @@ body:
   - type: input
     id: version
     attributes:
-      label: BasaltVR version or commit
+      label: TrailBridge VR version or commit
     validations:
       required: true
   - type: textarea

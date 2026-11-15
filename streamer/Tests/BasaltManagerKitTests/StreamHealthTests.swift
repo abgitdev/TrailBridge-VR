@@ -5,6 +5,16 @@ import BasaltCore
 final class StreamHealthTests: XCTestCase {
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
 
+    func testReconnectStatusReplacesStaleMetricWarnings() {
+        let issues = StreamHealthAdvisor.evaluate(
+            samples: [StreamMetricSample(date: now.addingTimeInterval(-20), fps: 1)],
+            settings: StreamLaunchSettings(), headsetDisconnected: true, now: now)
+        XCTAssertEqual(issues.count, 1)
+        XCTAssertEqual(issues.first?.kind, .headsetSilent)
+        XCTAssertEqual(issues.first.map { $0.title + " " + $0.detail },
+                       "Headset disconnected — waiting for it to reconnect. Open ALVR on the headset.")
+    }
+
     private func reports(fps values: [Double], endingAt end: Date? = nil) -> [StreamMetricSample] {
         let end = end ?? now
         return values.enumerated().map { index, value in
@@ -70,7 +80,7 @@ final class StreamHealthTests: XCTestCase {
         let wired = try XCTUnwrap(
             StreamHealthAdvisor.evaluate(samples: latencies, settings: settings, now: now).first)
         XCTAssertEqual(wired.kind, .highLatency)
-        XCTAssertTrue(wired.detail.contains("Low latency preset"), wired.detail)
+        XCTAssertTrue(wired.detail.contains("lower bitrate or resolution"), wired.detail)
 
         settings.connection = .wifi
         XCTAssertTrue(try XCTUnwrap(
@@ -84,6 +94,47 @@ final class StreamHealthTests: XCTestCase {
                 StreamHealthAdvisor.evaluate(samples: typical, settings: settings, now: now), [],
                 "\(preset) should accept the measured 47–58 ms pipeline")
         }
+    }
+
+    private func wifiLatency(sentFPS: [Double]) -> [StreamMetricSample] {
+        [70.0, 84, 85, 86, 87, 88].map { StreamMetricSample(date: now, latencyMilliseconds: $0) }
+            + sentFPS.map { StreamMetricSample(date: now, megabits: 95, sentFPS: $0) }
+    }
+
+    func testWiFiLatencyIsBlamedOnTheGameWhenTheMacSendsFewerFrames() throws {
+        var settings = StreamLaunchSettings()
+        settings.connection = .wifi
+        settings.latency = .low
+        settings.fps = 72
+        settings.megabits = 100
+        settings.resolution = .quality
+
+        // The game falls to 53–65 fps in heavy scenes while the headset
+        // displays every frame it is sent.
+        let behind = try XCTUnwrap(StreamHealthAdvisor.evaluate(
+            samples: wifiLatency(sentFPS: [72, 65.3, 60.6, 53.2, 61.5, 63.8]),
+            settings: settings, now: now).first)
+        XCTAssertEqual(behind.kind, .highLatency)
+        XCTAssertTrue(behind.detail.contains("sends only 63 of 72 fps"), behind.detail)
+        XCTAssertTrue(behind.detail.contains("from the game, not Wi-Fi"), behind.detail)
+        XCTAssertTrue(behind.detail.contains("Balanced resolution"), behind.detail)
+        XCTAssertFalse(behind.detail.contains("USB"), behind.detail)
+
+        // Behind the target, a lighter resolution helps more than a lower bitrate.
+        settings.resolution = .balanced
+        let balanced = try XCTUnwrap(StreamHealthAdvisor.evaluate(
+            samples: wifiLatency(sentFPS: [60, 60, 61, 59, 60]),
+            settings: settings, now: now).first)
+        XCTAssertTrue(balanced.detail.contains("Performance resolution"), balanced.detail)
+        XCTAssertFalse(balanced.detail.contains("bitrate"), balanced.detail)
+
+        // A game holding the target varies by about half a frame per report;
+        // then the delay is after the Mac and the Wi-Fi advice stands.
+        let holding = try XCTUnwrap(StreamHealthAdvisor.evaluate(
+            samples: wifiLatency(sentFPS: [71.6, 72.4, 72, 71.5, 72.1, 71.9]),
+            settings: settings, now: now).first)
+        XCTAssertTrue(holding.detail.contains("USB cable"), holding.detail)
+        XCTAssertFalse(holding.detail.contains("from the game"), holding.detail)
     }
 
     func testReportsMacPowerStateAfterStreamIssues() {

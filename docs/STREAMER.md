@@ -97,7 +97,7 @@ swift run -c release basalt-streamer --wired
 # Smoother fallback for a thermally constrained headset
 swift run -c release basalt-streamer --wired --mbps 20 --resolution balanced
 
-# Custom per-eye dimensions: even, and at most 1680x1760 with --runtime
+# Custom per-eye dimensions: even, 256 to 4096 pixels per side
 swift run -c release basalt-streamer --wired --resolution 1680x1760
 ```
 
@@ -107,9 +107,12 @@ Resolution presets are `performance` (896×944), `balanced` (1152×1216), and
 stream-settings model rather than hard-coded demo constants. Ultra latency requests a one-frame
 decoder target with less history; select low or balanced if it introduces head-motion unevenness.
 
-`--mbps` is the fixed VideoToolbox target selected for the run; Basalt does not silently lower it.
+`--mbps` is the VideoToolbox target for the run. Over USB it stays fixed; over Wi-Fi the streamer
+lowers it on send congestion, frame delivery deficit, feedback delay or decoder backlog, and
+raises it back, never above `--mbps`, after sustained clean feedback.
 Capture defaults to 72 Hz, and the streamer negotiates the supported headset rate closest to
-`--fps`. Video uses H.264 High Profile. ALVR's foveated encoder transform is not implemented yet.
+`--fps`. Video uses H.264 High Profile by default; `--codec hevc` selects HEVC Main 8-bit.
+ALVR's foveated encoder transform is not implemented.
 
 ### Latency presets
 
@@ -126,10 +129,9 @@ roughly 3–4 ms. Quest-reported input-to-display latency fell from roughly 55�
 47–51 ms in the same sample. A separate `--resolution quality --mbps 20` run also held
 approximately 72 fps at 1344×1408 per eye (2688×1408 encoded), with Quest decode near 21 ms
 and steady local capture-to-encode latency near 12 ms. These are encouraging transport-pipeline
-measurements. Low latency is now the user-selected default alongside the quality preset and a
-30 Mbps target; subjective quality during head motion and sustained thermal behavior still need
-monitoring. Compare one setting at a time from a cool headset so resolution, bitrate, latency
-preset, and thermal state are not confounded.
+measurements. Low latency is the default, alongside the quality preset and a 30 Mbps target.
+Compare one setting at a time from a cool headset so resolution, bitrate, latency preset, and
+thermal state are not confounded.
 
 ## Desktop preview mode
 

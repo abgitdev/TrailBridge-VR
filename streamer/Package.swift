@@ -6,8 +6,7 @@ let package = Package(
     platforms: [.macOS(.v14)],
     targets: [
         // Capture/encode/transport building blocks, kept in a library so
-        // they can be unit-tested and reused by later milestones (ALVR
-        // bridge, OpenXR runtime daemon).
+        // they can be unit-tested and shared by the streamer and the app.
         .target(name: "BasaltCore"),
         .target(name: "BasaltBottleKit"),
         .target(

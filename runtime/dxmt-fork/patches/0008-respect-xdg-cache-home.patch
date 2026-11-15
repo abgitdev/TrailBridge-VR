@@ -1,0 +1,35 @@
+diff --git a/src/winemetal/unix/cache.c b/src/winemetal/unix/cache.c
+--- a/src/winemetal/unix/cache.c
++++ b/src/winemetal/unix/cache.c
+@@ -1,4 +1,5 @@
+ #import <Foundation/Foundation.h>
++#include <stdlib.h>
+ #include "sqlite3.h"
+ #define WINEMETAL_API
+ #include "../winemetal_thunks.h"
+@@ -22,14 +23,20 @@
+ static inline NSString *
+ resolve_cache_dir(NSString *path, bool path_is_file) {
+   if (![path hasPrefix:@"/"]) {
+-    char buf[PATH_MAX];
+-    size_t len = confstr(_CS_DARWIN_USER_CACHE_DIR, buf, sizeof(buf));
++    const char *xdg_cache = getenv("XDG_CACHE_HOME");
++    NSString *base;
++    if (xdg_cache && xdg_cache[0] == '/') {
++      base = [NSString stringWithUTF8String:xdg_cache];
++    } else {
++      char buf[PATH_MAX];
++      size_t len = confstr(_CS_DARWIN_USER_CACHE_DIR, buf, sizeof(buf));
+ 
+-    if (!len) {
+-      return nil;
++      if (!len || len > sizeof(buf)) {
++        return nil;
++      }
++      base = [NSString stringWithUTF8String:buf];
+     }
+ 
+-    NSString *base = [NSString stringWithUTF8String:buf];
+     path = [base stringByAppendingPathComponent:path];
+   }
+   [[NSFileManager defaultManager] createDirectoryAtPath:path_is_file ? [path stringByDeletingLastPathComponent] : path

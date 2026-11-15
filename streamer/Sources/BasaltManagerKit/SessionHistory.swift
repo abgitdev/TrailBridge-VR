@@ -105,45 +105,121 @@ public struct SessionRecord: Codable, Equatable, Identifiable, Sendable {
 }
 
 /// Persists recent `SessionRecord`s as JSON in the Basalt data root, newest
-/// first. History is advisory: an unreadable file loads as empty and is
-/// replaced by the next save, and records from an incompatible future format
-/// are skipped individually rather than discarding the rest.
+/// first. History is advisory for reading: a file that cannot be read shows
+/// as empty, and records from an incompatible future format are skipped
+/// individually rather than discarding the rest. Writing never destroys what
+/// is there: a file that could not be read at that moment is left alone (the
+/// new record is not saved), a file that is not a history is set aside as
+/// `SessionHistory.damaged-<time>.json` before a new one is started, and a
+/// file written by a newer version of the app is not written over.
 public struct SessionHistoryStore: Sendable {
     public static let defaultLimit = 50
     public static let fileName = "SessionHistory.json"
 
+    /// Why nothing was saved. The file is as it was.
+    public enum Failure: LocalizedError, Equatable {
+        /// The file is there and could not be read: no permission, a folder
+        /// at its path, a read error on a share.
+        case unreadable(String)
+        /// The file has a newer `formatVersion` than this app writes.
+        case newerFormat(Int)
+
+        public var errorDescription: String? {
+            switch self {
+            case .unreadable(let why): L10n.string(.historyUnreadable, SessionHistoryStore.fileName, why)
+            case .newerFormat: L10n.string(.historyNewerFormat, SessionHistoryStore.fileName)
+            }
+        }
+    }
+
     public let file: URL
     public let limit: Int
+    /// False for the history in a data folder: that folder is never created
+    /// here, since one made in place of a disk that is not connected would
+    /// hide the real folder when the disk comes back.
+    private let createsFolder: Bool
 
+    /// A history in a file of the caller's own; its folder is created on saving.
     public init(file: URL, limit: Int = defaultLimit) {
         self.file = file
         self.limit = max(1, limit)
+        createsFolder = true
     }
 
+    /// The app's history, `SessionHistory.json` in its data folder. Saving
+    /// fails when the data folder is not there.
     public init(dataRoot: URL, limit: Int = defaultLimit) {
-        self.init(file: dataRoot.appendingPathComponent(Self.fileName), limit: limit)
+        file = dataRoot.appendingPathComponent(Self.fileName)
+        self.limit = max(1, limit)
+        createsFolder = false
     }
 
     public func load() -> [SessionRecord] {
-        guard let data = try? Data(contentsOf: file),
-              let document = try? Self.decoder.decode(Document.self, from: data)
-        else { return [] }
+        guard case .document(let document)? = try? contents() else { return [] }
         return Array(document.sessions.compactMap(\.value).prefix(limit))
     }
 
     /// Prepends `record` (replacing an older copy with the same ID) and
-    /// returns the saved history.
+    /// returns the saved history. Throws `Failure` without touching the file
+    /// when it cannot be read or is of a newer format. `setAside` is told
+    /// where a damaged file went.
     @discardableResult
-    public func append(_ record: SessionRecord) throws -> [SessionRecord] {
-        let records = [record] + load().filter { $0.id != record.id }
-        return try save(records)
+    public func append(_ record: SessionRecord,
+                       setAside: (URL) -> Void = { _ in }) throws -> [SessionRecord] {
+        let earlier = try recordsToKeep(setAside: setAside)
+        return try write([record] + earlier.filter { $0.id != record.id })
     }
 
+    /// Replaces the history with `records`, under the same rules as `append`.
     @discardableResult
-    public func save(_ records: [SessionRecord]) throws -> [SessionRecord] {
+    public func save(_ records: [SessionRecord],
+                     setAside: (URL) -> Void = { _ in }) throws -> [SessionRecord] {
+        _ = try recordsToKeep(setAside: setAside)
+        return try write(records)
+    }
+
+    private enum Contents {
+        /// No file: no session was recorded yet.
+        case missing
+        case document(Document)
+        /// Bytes that were read and are not a history.
+        case damaged
+    }
+
+    private func contents() throws -> Contents {
+        let data: Data
+        do {
+            data = try Data(contentsOf: file)
+        } catch {
+            guard FileManager.default.fileExists(atPath: file.path) else { return .missing }
+            throw Failure.unreadable(error.localizedDescription)
+        }
+        guard let document = try? Self.decoder.decode(Document.self, from: data) else { return .damaged }
+        return .document(document)
+    }
+
+    /// What the file holds now, once it is certain that writing loses nothing.
+    private func recordsToKeep(setAside: (URL) -> Void) throws -> [SessionRecord] {
+        switch try contents() {
+        case .missing:
+            return []
+        case .document(let document):
+            guard document.formatVersion <= Document.currentFormatVersion else {
+                throw Failure.newerFormat(document.formatVersion)
+            }
+            return document.sessions.compactMap(\.value)
+        case .damaged:
+            setAside(try DamagedFile.setAside(file))
+            return []
+        }
+    }
+
+    private func write(_ records: [SessionRecord]) throws -> [SessionRecord] {
         let kept = Array(records.prefix(limit))
-        try FileManager.default.createDirectory(
-            at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        if createsFolder {
+            try FileManager.default.createDirectory(
+                at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        }
         let document = Document(
             formatVersion: Document.currentFormatVersion,
             sessions: kept.map { Lossy(value: $0) })
@@ -172,6 +248,8 @@ public struct SessionHistoryStore: Sendable {
     private static var decoder: JSONDecoder {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
+        // A record says what a past session used; it is never migrated.
+        decoder.userInfo[StreamLaunchSettings.recordedSessionKey] = true
         return decoder
     }
 }

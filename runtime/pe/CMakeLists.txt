@@ -5,6 +5,7 @@ add_library(
     control.cpp
     entrypoints.cpp
     frame.cpp
+    frame_trace.cpp
     graphics.cpp
     input.cpp
     path.cpp

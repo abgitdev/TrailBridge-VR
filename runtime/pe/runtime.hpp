@@ -21,6 +21,8 @@ constexpr XrSystemId kSystemId = 1;
 // swapchain, or takes from the streamer's configured view size.
 constexpr uint32_t kMaxViewWidth = BASALT_CONTROL_MAX_VIEW_WIDTH;
 constexpr uint32_t kMaxViewHeight = BASALT_CONTROL_MAX_VIEW_HEIGHT;
+constexpr uint32_t kDefaultViewWidth = BASALT_CONTROL_DEFAULT_VIEW_WIDTH;
+constexpr uint32_t kDefaultViewHeight = BASALT_CONTROL_DEFAULT_VIEW_HEIGHT;
 
 // A swapchain image is not per-eye sized: UE4 submits both eyes as one texture
 // and selects each eye with imageRect, so the accepted image may be twice a
@@ -33,6 +35,7 @@ constexpr uint64_t kAlvrRightSystemClickPathId = 0x19729bd97073d474ULL;
 
 bool isValidInstance(XrInstance instance);
 bool isD3D11ExtensionEnabled(XrInstance instance);
+bool isDisplayRefreshRateExtensionEnabled(XrInstance instance);
 bool isD3D11RuntimeAvailable();
 bool isValidSession(XrSession session);
 ID3D11Device* retainSessionDevice(XrSession session);
@@ -141,6 +144,17 @@ XrResult XRAPI_CALL beginFrame(
 XrResult XRAPI_CALL endFrame(
     XrSession session,
     const XrFrameEndInfo* frameEndInfo);
+XrResult XRAPI_CALL enumerateDisplayRefreshRates(
+    XrSession session,
+    uint32_t displayRefreshRateCapacityInput,
+    uint32_t* displayRefreshRateCountOutput,
+    float* displayRefreshRates);
+XrResult XRAPI_CALL getDisplayRefreshRate(
+    XrSession session,
+    float* displayRefreshRate);
+XrResult XRAPI_CALL requestDisplayRefreshRate(
+    XrSession session,
+    float displayRefreshRate);
 XrResult XRAPI_CALL stringToPath(
     XrInstance instance,
     const char* pathString,

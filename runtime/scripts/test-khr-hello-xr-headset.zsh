@@ -7,6 +7,15 @@
 
 set -euo pipefail
 
+# The unmodified sample calls getchar() on a shutdown thread. EOF from a
+# noninteractive launcher makes it exit before its first frame with status 0.
+# Require a live terminal so that this cannot be mistaken for a passing gate.
+if [[ ! -t 0 ]]; then
+    print -u2 "FAIL: hello_xr requires an open terminal for stdin (use a PTY when automating)."
+    print -u2 "Closed stdin causes an immediate successful exit without rendering."
+    exit 2
+fi
+
 script_dir=${0:A:h}
 runtime_dir=${script_dir:h}
 repo_dir=${runtime_dir:h}
@@ -28,7 +37,11 @@ wine_extract_dir=${build_dir}/dxmt/toolchain/wine-${wine_version}
 wine_root=${wine_extract_dir}/Wine\ Devel.app/Contents/Resources/wine
 stock_dxmt=${build_dir}/dxmt/toolchain/dxmt-${dxmt_version}/${dxmt_version}
 fork_dxmt=${build_dir}/dxmt/fork-install
-wine_prefix=${BASALT_DXMT_WINEPREFIX:-${build_dir}/dxmt/prefix-wine-${wine_version}-dxmt-${dxmt_version}}
+# Same prefix as test-dxmt.zsh; see wine-sandbox.zsh.
+source "${script_dir}/wine-sandbox.zsh"
+wine_sandbox_default_prefix dxmt-wine-${wine_version}-dxmt-${dxmt_version} \
+    "${build_dir}/dxmt/prefix-wine-${wine_version}-dxmt-${dxmt_version}"
+wine_prefix=${${BASALT_DXMT_WINEPREFIX:-${REPLY}}:a}
 probe_dir=${build_dir}/dxmt/probe
 control_dir=${build_dir}/hello-xr-integration
 control_file=${control_dir}/control
@@ -49,10 +62,16 @@ if [[ ! -x ${wine_root}/bin/wine ||
     exit 1
 fi
 if command -v lsof >/dev/null &&
-   [[ -n $(lsof -nP -tiTCP:9999 -sTCP:LISTEN 2>/dev/null || true) ]]; then
-    print -u2 "TCP port 9999 is already in use. Stop the existing streamer with Ctrl-C, then retry."
+   [[ -n $(lsof -nP -t -iUDP:9943 -iTCP:9943 -sTCP:LISTEN 2>/dev/null || true) ]]; then
+    # A Wi-Fi session holds UDP 9943 (ALVR discovery). A USB session, which is
+    # what this script starts, holds no port itself: adb listens on TCP 9943
+    # for the forward to the headset.
+    print -u2 "ALVR port 9943 is already in use (UDP: a Wi-Fi session; TCP: the adb forward of a USB session)."
+    print -u2 "Stop the existing streamer with Ctrl-C, then retry."
+    print -u2 "If no streamer is running, a forward was left behind: adb forward --remove tcp:9943"
     exit 1
 fi
+wine_sandbox_prepare "${wine_prefix}" BASALT_DXMT_WINEPREFIX
 
 streamer_pid=
 fork_overlaid=false
@@ -116,6 +135,7 @@ WINEPREFIX=${wine_prefix} "${wine_root}/bin/wineserver" -k >/dev/null 2>&1 || tr
 overlay_dxmt "${stock_dxmt}/x86_64-windows" "${stock_dxmt}/x86_64-unix"
 WINEPREFIX=${wine_prefix} WINEARCH=win64 WINEDEBUG=-all \
     "${wine_root}/bin/wineboot" -u >/dev/null 2>&1
+wine_sandbox_verify "${wine_prefix}" BASALT_DXMT_WINEPREFIX
 overlay_dxmt "${fork_dxmt}/x86_64-windows" "${fork_dxmt}/x86_64-unix"
 fork_overlaid=true
 

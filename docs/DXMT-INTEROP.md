@@ -83,12 +83,13 @@ cost the project should accept deliberately, not by default.
   behavior change; the gate is set only in Basalt-managed launch profiles.
 - Constraint check (from Metal docs, flagged in the audit): IOSurface-backed textures require
   2D, one mip level, and cannot be `MTLStorageModePrivate`. Basalt swapchain images are 2D,
-  mip 1, array 1, ≤1680×1760 RGBA8/BGRA8 — compatible. The storage-mode change
+  mip 1, array 1, ≤4096×4096 RGBA8/BGRA8 — compatible. The storage-mode change
   (shared/managed instead of private) has an unmeasured GPU-performance cost; the acceptance
   test must include a frame-time comparison.
-- The DXMT fork can allocate both RGBA8 and BGRA8 IOSurfaces, but Basalt's current OpenXR runtime
-  advertises only BGRA8/BGRA8-sRGB swapchains: `CVPixelBufferCreateWithIOSurface` rejects the
-  RGBA layout, while the BGRA layout is the zero-copy CoreVideo/VideoToolbox transport format.
+- The DXMT fork can allocate both RGBA8 and BGRA8 IOSurfaces. The OpenXR runtime advertises
+  BGRA8/BGRA8-sRGB first, the zero-copy CoreVideo/VideoToolbox transport format, then
+  RGBA8/RGBA8-sRGB: `CVPixelBufferCreateWithIOSurface` rejects the RGBA layout, so the
+  compositor reads those IOSurfaces directly in Metal.
 - PE-side data flow: `WMTTextureInfo` already round-trips through the call and has an unused
   `uint32_t reserved` out-field plus an out `mach_port` (`winemetal.h:518-532`) — the unix
   side writes `IOSurfaceGetID(surface)` into it; no new PE plumbing.
@@ -146,9 +147,18 @@ ephemeral port, and writes `<port> <token> <per-eye width> <per-eye height>` to 
 launcher passes to the bottle via environment (`BASALT_CONTROL=path`). The dimensions make
 the runtime advertise the selected stream resolution as OpenXR's recommended swapchain size,
 avoiding an expensive render-then-downscale step. Legacy two-field files fall back to
-1680×1760, which is also the maximum (`BASALT_CONTROL_MAX_VIEW_*`); `RuntimeLink` refuses a
+1680×1760. The maximum is 4096 per side (`BASALT_CONTROL_MAX_VIEW_*`); `RuntimeLink` refuses a
 larger stream resolution rather than let the game render at a size the streamer does not encode. The token (random 16 bytes, hex) must be echoed in `Hello` so a stray local process
 cannot impersonate the game.
+
+Headset sessions publish this file atomically (mode 0600) only after ALVR negotiation.
+An optional fifth field carries the negotiated integer millihertz, with spaces padding
+its start to byte offset 128. Older DLLs read only 127 bytes and reject extra fields;
+they therefore retain 72 Hz and still connect. New DLLs accept padded or compact
+five-field files and old two/four-field files, defaulting to 72 Hz for missing or
+invalid rates (valid range: 1–240000 mHz). With a rate but no view size, write `0 0`
+for dimensions. The rounded nanosecond period is fixed for each OpenXR session.
+Socket payloads and protocol version 9 are unchanged.
 
 Framing: little-endian, `u32 length` + `u16 message type` + payload; strict protocol version 9 in
 `Hello`. Messages (runtime → daemon unless noted):
@@ -185,8 +195,8 @@ Lifetime rules:
   are never re-allocated while the daemon may still map them.
 - Runtime-side failure policy: if the daemon is absent or the socket dies, the runtime keeps
   running exactly as today (headless, `shouldRender` false, no session loss in the
-  prototype); reconnect is a later concern. The daemon ignores `FrameReady` for unknown
-  swapchain ids (races with teardown are benign).
+  prototype). The daemon ignores `FrameReady` for unknown swapchain ids (races with teardown
+  are benign).
 - One runtime receiver thread owns all socket reads, publishes
   head/controller/mask/button/profile/view/reset state, and demultiplexes
   swapchain/frame acknowledgements to condition-variable waiters. A separate send lock keeps messages
@@ -196,7 +206,8 @@ Lifetime rules:
   Touch sources, localized names, profile-change events, action-set priority, spaces, and haptics
   are frozen consistently at `xrSyncActions`. Stock ALVR transmits a corrected, already-predicted
   grip pose plus velocity but not its separately-polled aim pose: Basalt exposes that velocity
-  through `XrSpaceVelocity` without double prediction, and aim aliases grip by upstream limitation.
+  through `XrSpaceVelocity` without double prediction and derives aim from grip with an
+  estimated Touch transform.
 
 ### 5. What ships (build and pinning)
 

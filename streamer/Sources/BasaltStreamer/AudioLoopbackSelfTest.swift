@@ -46,6 +46,8 @@ enum AudioLoopbackSelfTest {
                 deviceName = remaining.removeFirst()
             }
 
+            let device = try GameAudioDeviceDiscovery.matchingInputDevice(deviceName)
+            try GameAudioDeviceDiscovery.setNominalSampleRate(GameAudioCapture.sampleRate, for: device)
             let capture = try GameAudioCapture(deviceNameContains: deviceName)
             let measurement = Measurement()
             capture.onPCM16 = { measurement.consume($0) }

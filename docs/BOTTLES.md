@@ -6,10 +6,9 @@ default data root is `~/Library/Application Support/BasaltVR`; set `BASALT_DATA_
 file, and launch profile stays below that root.
 
 > [!IMPORTANT]
-> The downloadable developer-preview app includes Basalt's compiled runtime and DXMT handoff
-> artifacts, but it does not redistribute the pinned Wine engine. Creating the supported VR bottle
-> currently requires a prepared source checkout and the build steps below. The packaged manager is
-> not yet a turnkey installer.
+> TrailBridge VR does not redistribute the pinned Wine engine. The app from the DMG downloads it
+> into the data folder when it is first set up; a source checkout gets it from the build steps
+> below.
 
 ## Engines and safety
 
@@ -72,9 +71,16 @@ Wine process's host working directory.
 
 ## OpenComposite
 
-Basalt does not download, link, or redistribute OpenComposite. Supply the matching-bitness
-`openvr_api.dll` from the [official OpenComposite project](https://gitlab.com/znixian/OpenOVR/-/tree/openxr),
-then name the exact game DLL target inside the managed prefix:
+OpenComposite is a separate GPL-3.0 project by its authors and is never bundled with TrailBridge.
+In Library → More → OpenVR Support… (also available in Edit Launch Profile…), select a game DLL.
+Download Official Build… asks for confirmation before downloading the matching x64 or x86 DLL
+from the [official OpenComposite site](https://znix.xyz/OpenComposite/). The app saves it under
+`Downloads/OpenComposite/<arch>/openvr_api.dll` in its data folder and displays its size and
+SHA-256 after validating the PE architecture. Alternatively, use Choose File… for your own DLL.
+Install OpenVR Support preserves the original; Uninstall OpenVR Support restores it and removes
+only an ini starting with `; Managed by BasaltVR`. Existing user configuration is preserved.
+
+The command-line installer accepts a separately obtained DLL and the exact target inside the managed prefix:
 
 ```sh
 swift run --package-path streamer basaltctl opencomposite install beat-saber-steam \
@@ -82,8 +88,9 @@ swift run --package-path streamer basaltctl opencomposite install beat-saber-ste
   --target "$HOME/Library/Application Support/BasaltVR/Bottles/beat-saber/prefix/drive_c/Program Files (x86)/Steam/steamapps/common/Beat Saber/Beat Saber_Data/Plugins/x86_64/openvr_api.dll"
 ```
 
-The installer requires an `MZ` PE artifact and an `openvr_api.dll` destination below that
-bottle's prefix. If the game DLL exists, its first version is retained as
+The installer requires a PE DLL matching the existing game DLL’s x64 or x86 architecture and an
+`openvr_api.dll` destination below that bottle’s prefix, with no symlinks in its target paths.
+The game DLL’s first version is retained as
 `openvr_api.dll.basalt-original`. The generated `opencomposite.ini` uses the D3D11 path
 (`initUsingVulkan=false`).
 
@@ -109,10 +116,13 @@ The run command refuses incomplete bottles or a missing control file. It maps th
 Wine `Z:` drive, enables the private DXMT IOSurface gate, applies the profile environment, and
 starts the explicit executable. Extra arguments after `--` are appended for that invocation only.
 
-The generated OpenComposite configuration keeps `enableAudio=false`: OpenComposite's audio option
-tries to redirect games to an Oculus/Rift output that does not exist in this Wine setup. Instead,
-set BlackHole to 48 kHz in Audio MIDI Setup and let `--route-audio` temporarily direct application
-output into the loopback; the streamer restores the prior Mac output on shutdown. The management
-app adds this flag automatically. Direct CLI users with an existing Multi-Output route can omit
-it. Validate the host side with `basalt-streamer --list-audio-devices` and
+The generated OpenComposite ini must contain only options understood by the pinned OpenComposite
+build: it sets `initUsingVulkan=false`. Unknown options can abort initialization. Audio stays on
+the host BlackHole route: `--route-audio` sets and verifies the device's nominal sample rate
+at 48 kHz before temporarily directing application output into the loopback. If the rate cannot
+be set, the streamer reports an error with guidance to check Audio MIDI Setup. It restores the prior Mac
+output on shutdown. The management app adds this flag automatically. Direct CLI users with an
+existing Multi-Output route can omit it. Validate the host side with
+`basalt-streamer --list-audio-devices` and
 `basalt-streamer audio-loopback-selftest --device 'BlackHole 2ch'`.
+The loopback self-test also sets and verifies 48 kHz before capture.

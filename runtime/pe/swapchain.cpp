@@ -1,4 +1,5 @@
 #include "runtime.hpp"
+#include "frame_trace.hpp"
 
 #include <windows.h>
 
@@ -18,12 +19,13 @@ constexpr uint32_t kSwapchainImageCount = 3;
 constexpr uint32_t kMaxArraySize = 2;
 constexpr size_t kMaxSwapchains = 4;
 
-constexpr std::array<DXGI_FORMAT, 2> kSupportedFormats = {
-    // Runtime order is preference order. The native CoreVideo handoff can
-    // wrap BGRA IOSurfaces directly, while CVPixelBuffer rejects DXMT's RGBA
-    // IOSurfaces. Do not advertise formats the compositor cannot deliver.
+constexpr std::array<DXGI_FORMAT, 4> kSupportedFormats = {
+    // Runtime order is preference order. Keep the CoreVideo-native BGRA
+    // formats first; the compositor wraps RGBA IOSurfaces directly in Metal.
     DXGI_FORMAT_B8G8R8A8_UNORM,
     DXGI_FORMAT_B8G8R8A8_UNORM_SRGB,
+    DXGI_FORMAT_R8G8B8A8_UNORM,
+    DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
 };
 
 enum class ImageState {
@@ -68,13 +70,16 @@ void release(Interface*& object) {
     }
 }
 
-// UE4 titles create their eye textures as B8G8R8A8_TYPELESS and rely on their
-// own resource views for the sRGB/linear interpretation, then hand that format
-// straight to xrCreateSwapchain. Back the request with the typed BGRA format
-// the compositor can export instead of rejecting the swapchain.
+// UE4 titles use B8G8R8A8_TYPELESS; OpenComposite also hands over
+// R8G8B8A8_TYPELESS. They rely on their own resource views for the sRGB/linear
+// interpretation. Back each request with the corresponding typed UNORM
+// format the compositor can export instead of rejecting the swapchain.
 DXGI_FORMAT normalizeFormat(int64_t format) {
     if (format == static_cast<int64_t>(DXGI_FORMAT_B8G8R8A8_TYPELESS)) {
         return DXGI_FORMAT_B8G8R8A8_UNORM;
+    }
+    if (format == static_cast<int64_t>(DXGI_FORMAT_R8G8B8A8_TYPELESS)) {
+        return DXGI_FORMAT_R8G8B8A8_UNORM;
     }
     return static_cast<DXGI_FORMAT>(format);
 }
@@ -422,6 +427,11 @@ XrResult XRAPI_CALL acquireSwapchainImage(
             record->acquireSequence[candidate] = record->nextAcquireSequence++;
             record->nextAcquireIndex = (candidate + 1) % kSwapchainImageCount;
             *index = candidate;
+            if (frameTraceEnabled()) {
+                TraceRecord r; r.kind = TraceKind::Acquire; r.time = frameTraceNow();
+                r.eyes[0].swapchain = reinterpret_cast<uintptr_t>(swapchain);
+                r.eyes[0].image = candidate; frameTracePush(r);
+            }
             ReleaseSRWLockExclusive(&gSwapchainLock);
             return XR_SUCCESS;
         }
@@ -471,6 +481,11 @@ XrResult XRAPI_CALL releaseSwapchainImage(
         record->imageStates[index] = ImageState::Available;
         record->everReleased = true;
         record->lastReleasedIndex = index;
+        if (frameTraceEnabled()) {
+            TraceRecord r; r.kind = TraceKind::Release; r.time = frameTraceNow();
+            r.eyes[0].swapchain = reinterpret_cast<uintptr_t>(swapchain);
+            r.eyes[0].image = index; frameTracePush(r);
+        }
         ReleaseSRWLockExclusive(&gSwapchainLock);
         return XR_SUCCESS;
     }

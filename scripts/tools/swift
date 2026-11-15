@@ -1,0 +1,21 @@
+#!/bin/zsh
+set -euo pipefail
+
+readonly repo_dir=${0:A:h:h:h}
+if [[ ${BASALT_REPO_ROOT:-} != "$repo_dir" ]]; then
+    exec "$repo_dir/scripts/trailbridge-dev.zsh" swift "$@"
+fi
+
+case ${1:-} in
+    build|test|run|package)
+        readonly subcommand=$1
+        shift
+        exec /usr/bin/swift "$subcommand" \
+            --cache-path "$repo_dir/.local/cache/swiftpm" \
+            --config-path "$repo_dir/.local/config/swiftpm" \
+            --security-path "$repo_dir/.local/config/swiftpm-security" \
+            --scratch-path "$repo_dir/streamer/.build" \
+            --manifest-cache local "$@"
+        ;;
+    *) exec /usr/bin/swift "$@" ;;
+esac

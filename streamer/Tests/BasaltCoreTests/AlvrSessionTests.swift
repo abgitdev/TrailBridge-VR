@@ -9,6 +9,65 @@ final class AlvrSessionTests: XCTestCase {
         prefers10Bit: false, prefersFullRange: true,
         preferredEncodingGamma: 1, prefersHDR: false)
 
+    // Frozen sorted JSON of the stream config from before the post-processing switches.
+    private let legacySessionJSON = #"{"session_settings":{"video":{"buffering_history_weight":0.80000001192092896,"max_buffering_frames":1.5}}}"#
+    private let legacyNegotiatedJSON = #"{"enable_foveated_encoding":false,"enable_hdr":false,"encoding_gamma":1,"game_audio_sample_rate":48000,"refresh_rate_hint":90,"use_full_range":false,"use_multimodal_protocol":false,"view_resolution":[1680,1760],"wired":false}"#
+
+    private func pinnedPayload(sessionJSON: String, wired: Bool) -> Data {
+        let negotiated = wired
+            ? legacyNegotiatedJSON.replacingOccurrences(of: #""wired":false"#, with: #""wired":true"#)
+            : legacyNegotiatedJSON
+        var result = Data()
+        for string in [sessionJSON, negotiated] {
+            let bytes = Data(string.utf8)
+            var length = UInt64(bytes.count).littleEndian
+            withUnsafeBytes(of: &length) { result.append(contentsOf: $0) }
+            result.append(bytes)
+        }
+        return result
+    }
+
+    func testDefaultPayloadIsByteIdenticalToLegacyFixture() throws {
+        let settings = try AlvrNegotiatedSettings.beatSaberDefaults(for: quest)
+        for wired in [false, true] {
+            let expected = pinnedPayload(sessionJSON: legacySessionJSON, wired: wired)
+            XCTAssertEqual(try AlvrStreamConfigEncoder.payload(settings: settings, wired: wired), expected)
+            XCTAssertEqual(try AlvrStreamConfigEncoder.payload(
+                settings: settings, wired: wired, questSupersampling: .off, questSharpening: .off), expected)
+        }
+    }
+
+    func testAllPostProcessingCombinationsMatchPinnedV20141JSON() throws {
+        // Session schema choices must be objects; Rust enum strings here would
+        // be silently replaced by ALVR's defaults during fuzzy merging.
+        let fixtures: [(QuestPostProcessingLevel, QuestPostProcessingLevel, String)] = [
+            (.off, .off, #"{"session_settings":{"video":{"buffering_history_weight":0.80000001192092896,"max_buffering_frames":1.5}}}"#),
+            (.off, .normal, #"{"session_settings":{"video":{"buffering_history_weight":0.80000001192092896,"clientside_post_processing":{"content":{"sharpening":{"variant":"Normal"},"super_sampling":{"variant":"Disabled"}},"enabled":true},"max_buffering_frames":1.5}}}"#),
+            (.off, .quality, #"{"session_settings":{"video":{"buffering_history_weight":0.80000001192092896,"clientside_post_processing":{"content":{"sharpening":{"variant":"Quality"},"super_sampling":{"variant":"Disabled"}},"enabled":true},"max_buffering_frames":1.5}}}"#),
+            (.normal, .off, #"{"session_settings":{"video":{"buffering_history_weight":0.80000001192092896,"clientside_post_processing":{"content":{"sharpening":{"variant":"Disabled"},"super_sampling":{"variant":"Normal"}},"enabled":true},"max_buffering_frames":1.5}}}"#),
+            (.normal, .normal, #"{"session_settings":{"video":{"buffering_history_weight":0.80000001192092896,"clientside_post_processing":{"content":{"sharpening":{"variant":"Normal"},"super_sampling":{"variant":"Normal"}},"enabled":true},"max_buffering_frames":1.5}}}"#),
+            (.normal, .quality, #"{"session_settings":{"video":{"buffering_history_weight":0.80000001192092896,"clientside_post_processing":{"content":{"sharpening":{"variant":"Quality"},"super_sampling":{"variant":"Normal"}},"enabled":true},"max_buffering_frames":1.5}}}"#),
+            (.quality, .off, #"{"session_settings":{"video":{"buffering_history_weight":0.80000001192092896,"clientside_post_processing":{"content":{"sharpening":{"variant":"Disabled"},"super_sampling":{"variant":"Quality"}},"enabled":true},"max_buffering_frames":1.5}}}"#),
+            (.quality, .normal, #"{"session_settings":{"video":{"buffering_history_weight":0.80000001192092896,"clientside_post_processing":{"content":{"sharpening":{"variant":"Normal"},"super_sampling":{"variant":"Quality"}},"enabled":true},"max_buffering_frames":1.5}}}"#),
+            (.quality, .quality, #"{"session_settings":{"video":{"buffering_history_weight":0.80000001192092896,"clientside_post_processing":{"content":{"sharpening":{"variant":"Quality"},"super_sampling":{"variant":"Quality"}},"enabled":true},"max_buffering_frames":1.5}}}"#),
+        ]
+        let settings = try AlvrNegotiatedSettings.beatSaberDefaults(for: quest)
+        for (supersampling, sharpening, sessionJSON) in fixtures {
+            for wired in [false, true] {
+                let expected = pinnedPayload(sessionJSON: sessionJSON, wired: wired)
+                let context = "\(supersampling)/\(sharpening), wired=\(wired)"
+                XCTAssertEqual(try AlvrStreamConfigEncoder.payload(
+                    settings: settings, wired: wired,
+                    questSupersampling: supersampling, questSharpening: sharpening), expected, context)
+                let framed = try AlvrStreamConfigEncoder.framedPacket(
+                    settings: settings, wired: wired,
+                    questSupersampling: supersampling, questSharpening: sharpening)
+                XCTAssertEqual(Data(framed.dropFirst(4)), expected, context)
+                XCTAssertEqual(framed.prefix(4).reduce(0) { ($0 << 8) | Int($1) }, expected.count)
+            }
+        }
+    }
+
     func testBeatSaberDefaultsPrefer90Hz() throws {
         let settings = try AlvrNegotiatedSettings.beatSaberDefaults(for: quest)
         XCTAssertEqual(settings.width, 1680)
@@ -25,6 +84,25 @@ final class AlvrSessionTests: XCTestCase {
             supports10Bit: false, supportsAV1: false, prefers10Bit: false,
             prefersFullRange: false, preferredEncodingGamma: 1, prefersHDR: false)
         XCTAssertEqual(try AlvrNegotiatedSettings.beatSaberDefaults(for: capabilities).refreshRate, 72)
+    }
+
+    func testIgnoresHeadsetAdvertisedRefreshRatesBelowTheSupportedMinimum() throws {
+        // The peer controls the list; a near-zero rate must never be chosen.
+        func capabilities(_ rates: [Float]) -> AlvrVideoCapabilities {
+            AlvrVideoCapabilities(
+                width: 1_680, height: 1_760, refreshRates: rates, microphoneSampleRate: 44_100,
+                supportsFoveatedEncoding: false, supportsHighProfile: true,
+                supports10Bit: false, supportsAV1: false, prefers10Bit: false,
+                prefersFullRange: false, preferredEncodingGamma: 1, prefersHDR: false)
+        }
+        for rates: [Float] in [[1e-12], [.leastNonzeroMagnitude], [1], [59]] {
+            XCTAssertThrowsError(try AlvrNegotiatedSettings.beatSaberDefaults(
+                for: capabilities(rates)), "\(rates)")
+        }
+        let settings = try AlvrNegotiatedSettings.desktopPreviewDefaults(
+            for: capabilities([1e-12, 60, 72]), requestedWidth: 1_152, requestedHeight: 1_216,
+            preferredRefreshRate: 1)
+        XCTAssertEqual(settings.refreshRate, 60)
     }
 
     func testRejectsHeadsetAdvertisedResolutionOutsideSupportedRange() throws {

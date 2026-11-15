@@ -47,12 +47,14 @@ typedef struct {
 } Swapchain;
 
 #define DXGI_FORMAT_B8G8R8A8_UNORM_VALUE 87u
+#define DXGI_FORMAT_B8G8R8A8_UNORM_SRGB_VALUE 91u
 
 /* The shared color formula packs r,g,b,a memory bytes (RGBA8); BGRA8
  * surfaces store b,g,r,a, so swap the red and blue bytes to compare. */
 static uint32_t expected_pixel_for(const Swapchain* swapchain, uint64_t frame_number) {
     const uint32_t rgba = basaltTestClearColor(frame_number);
-    if (swapchain->dxgi_format == DXGI_FORMAT_B8G8R8A8_UNORM_VALUE) {
+    if (swapchain->dxgi_format == DXGI_FORMAT_B8G8R8A8_UNORM_VALUE ||
+        swapchain->dxgi_format == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB_VALUE) {
         return (rgba & 0xff00ff00u) | ((rgba & 0xffu) << 16) | ((rgba >> 16) & 0xffu);
     }
     return rgba;

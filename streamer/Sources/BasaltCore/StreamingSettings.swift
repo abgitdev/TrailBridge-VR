@@ -1,7 +1,7 @@
 import Foundation
 
-/// Per-eye dimensions shared by the CLI today and launch profiles / SwiftUI
-/// controls later. The encoded side-by-side frame is twice `width`.
+/// Per-eye dimensions shared by the CLI, launch profiles and the SwiftUI
+/// controls. The encoded side-by-side frame is twice `width`.
 public struct PerEyeResolution: Equatable, Codable, Sendable {
     public static let dimensionRange = 256...4_096
 

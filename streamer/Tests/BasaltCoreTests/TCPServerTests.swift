@@ -37,4 +37,14 @@ final class TCPServerTests: XCTestCase {
         server.broadcast(payload)
         await fulfillment(of: [receivedPayload], timeout: 5)
     }
+
+    func testBusyPortIsReportedWithThePortAndItsCause() {
+        let busy = TCPServer.startupError(.posix(.EADDRINUSE), port: 9999)
+        XCTAssertEqual(busy.localizedDescription,
+                       "Cannot bind TCP port 9999: another program is using this port "
+                       + "(ALVR, MoltenVR or a second streamer?); quit it and try again")
+        // Any other failure keeps the system's own description.
+        let other = TCPServer.startupError(.posix(.EACCES), port: 80)
+        XCTAssertEqual(other.localizedDescription, NWError.posix(.EACCES).localizedDescription)
+    }
 }

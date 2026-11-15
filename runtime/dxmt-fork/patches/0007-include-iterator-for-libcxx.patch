@@ -1,0 +1,11 @@
+diff --git a/include/ftl.hpp b/include/ftl.hpp
+--- a/include/ftl.hpp
++++ b/include/ftl.hpp
+@@ -1,6 +1,7 @@
+ #pragma once
+ #include <type_traits>
+ #include <utility>
+ #include <vector>
+ #include <algorithm>
++#include <iterator>
+ 

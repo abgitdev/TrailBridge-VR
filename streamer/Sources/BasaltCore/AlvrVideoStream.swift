@@ -317,16 +317,25 @@ public final class AlvrVideoStreamSender: @unchecked Sendable {
     static let udpSendBufferBytes: Int32 = 64 * 1_024
     static let tcpSendBufferBytes: Int32 = 1 * 1_024 * 1_024
     static let tcpReceiveBufferBytes: Int32 = 1 * 1_024 * 1_024
+    static let tcpTrackingTimeoutNanoseconds: UInt64 = 5_000_000_000
     private let socket: Int32
     private let queue = DispatchQueue(label: "basalt.alvr.video")
     private let queueKey = DispatchSpecificKey<Void>()
     private var readSource: DispatchSourceRead?
+    private var trackingWatchdog: DispatchSourceTimer?
     private var nextPacketIndex: UInt32 = 0
     private var nextHapticsPacketIndex: UInt32 = 0
     private var nextAudioPacketIndex: UInt32 = 0
     private let stateLock = NSLock()
     private var sendInFlight = false
     private var audioSendInFlight = false
+    private struct PendingHaptic {
+        let durationNanoseconds: UInt64
+        let frequency: Float
+        let amplitude: Float
+    }
+    private var pendingHaptics: [AlvrHand: PendingHaptic] = [:] // stateLock
+    private var hapticsSendScheduled = false // stateLock
     private var lastCongestionRecovery = DispatchTime(uptimeNanoseconds: 0)
     private var latestTrackingTimestamp: UInt64?
     private var latestTrackingArrival = DispatchTime(uptimeNanoseconds: 0)
@@ -334,6 +343,7 @@ public final class AlvrVideoStreamSender: @unchecked Sendable {
     private var tcpReceiveBuffer = Data()
     private var transportFailed = false
     private var uplinkStarted = false
+    private var socketClosed = false // sender queue only
 
     public init(host: String, remotePort: UInt16 = defaultPort,
                 localPort: UInt16 = defaultPort,
@@ -355,7 +365,7 @@ public final class AlvrVideoStreamSender: @unchecked Sendable {
                     }
                 }
                 guard bindResult == 0 else {
-                    throw Self.socketError("Cannot bind ALVR video UDP port \(localPort)")
+                    throw BasaltError.cannotBind("ALVR video UDP port \(localPort)", code: errno)
                 }
             }
 
@@ -426,13 +436,30 @@ public final class AlvrVideoStreamSender: @unchecked Sendable {
     }
 
     deinit {
-        readSource?.cancel()
-        // Releasing a suspended dispatch source crashes.
-        if !uplinkStarted { readSource?.resume() }
+        stop()
+    }
+
+    public func stop() {
+        stateLock.lock()
+        transportFailed = true
+        stateLock.unlock()
+        let finish = {
+            guard !self.socketClosed else { return }
+            self.socketClosed = true
+            self.stateLock.lock()
+            let needsResume = !self.uplinkStarted
+            self.uplinkStarted = true
+            self.stateLock.unlock()
+            self.readSource?.cancel()
+            self.trackingWatchdog?.cancel()
+            if needsResume { self.readSource?.resume() }
+            Darwin.shutdown(self.socket, SHUT_RDWR)
+            close(self.socket)
+        }
         if DispatchQueue.getSpecific(key: queueKey) != nil {
-            close(socket)
+            finish()
         } else {
-            _ = queue.sync { close(socket) }
+            queue.sync(execute: finish)
         }
     }
 
@@ -446,6 +473,37 @@ public final class AlvrVideoStreamSender: @unchecked Sendable {
         stateLock.unlock()
         guard !alreadyStarted else { return }
         readSource?.resume()
+        if transport == .tcp {
+            queue.async { [weak self] in
+                guard let self, !self.socketClosed else { return }
+                let timer = DispatchSource.makeTimerSource(queue: self.queue)
+                timer.schedule(deadline: .now() + .seconds(1), repeating: .seconds(1))
+                timer.setEventHandler { [weak self] in
+                    self?.checkTrackingLiveness(at: DispatchTime.now().uptimeNanoseconds)
+                }
+                self.trackingWatchdog = timer
+                timer.resume()
+            }
+        }
+    }
+
+    /// A local adb socket can remain open while the downstream forward is
+    /// stuck. TCP write success/keepalives alone do not prove Quest liveness.
+    /// Initial tracking still has the connection owner's ten-second timeout.
+    func checkTrackingLiveness(at now: UInt64) {
+        queue.async { [weak self] in
+            guard let self, self.transport == .tcp else { return }
+            self.stateLock.lock()
+            let arrival = self.latestTrackingArrival.uptimeNanoseconds
+            let expired = !self.transportFailed && self.latestTrackingTimestamp != nil
+                && now >= arrival && now - arrival >= Self.tcpTrackingTimeoutNanoseconds
+            self.stateLock.unlock()
+            guard expired else { return }
+            self.failTCPTransport()
+            self.onError?(BasaltError(String(format:
+                "ALVR USB tracking stalled for %.1f s; reconnecting the forwarded stream",
+                Double(now - arrival) / 1_000_000_000)))
+        }
     }
 
     @discardableResult
@@ -494,22 +552,42 @@ public final class AlvrVideoStreamSender: @unchecked Sendable {
         return true
     }
 
+    /// The runtime can ask for pulses faster than the socket takes them (or
+    /// while a video frame holds the queue). Only the newest pulse per hand
+    /// waits, and one block on the queue sends whatever is waiting.
     public func sendHaptics(hand: AlvrHand, durationNanoseconds: UInt64,
                             frequency: Float, amplitude: Float) {
+        stateLock.lock()
+        guard !transportFailed else {
+            stateLock.unlock()
+            return
+        }
+        pendingHaptics[hand] = PendingHaptic(
+            durationNanoseconds: durationNanoseconds, frequency: frequency, amplitude: amplitude)
+        let schedule = !hapticsSendScheduled
+        hapticsSendScheduled = true
+        stateLock.unlock()
+        guard schedule else { return }
         queue.async { [self] in
+            stateLock.lock()
+            let pending = pendingHaptics
+            pendingHaptics.removeAll(keepingCapacity: true)
+            hapticsSendScheduled = false
+            let failed = transportFailed
+            stateLock.unlock()
+            guard !failed else { return }
             do {
-                stateLock.lock()
-                let failed = transportFailed
-                stateLock.unlock()
-                guard !failed else { return }
-                let packet = try AlvrHapticsPacketizer.packet(
-                    hand: hand, durationNanoseconds: durationNanoseconds,
-                    frequency: frequency, amplitude: amplitude,
-                    packetIndex: nextHapticsPacketIndex)
-                nextHapticsPacketIndex &+= 1
-                let deadline = DispatchTime.now().uptimeNanoseconds
-                    &+ Self.tcpAccessUnitDeadlineNanoseconds
-                _ = try sendShard(packet, deadline: deadline, reportsVideoCongestion: false)
+                for hand in [AlvrHand.left, .right] {
+                    guard let haptic = pending[hand] else { continue }
+                    let packet = try AlvrHapticsPacketizer.packet(
+                        hand: hand, durationNanoseconds: haptic.durationNanoseconds,
+                        frequency: haptic.frequency, amplitude: haptic.amplitude,
+                        packetIndex: nextHapticsPacketIndex)
+                    nextHapticsPacketIndex &+= 1
+                    let deadline = DispatchTime.now().uptimeNanoseconds
+                        &+ Self.tcpAccessUnitDeadlineNanoseconds
+                    _ = try sendShard(packet, deadline: deadline, reportsVideoCongestion: false)
+                }
             } catch {
                 if transport == .tcp { failTCPTransport() }
                 onError?(error)
@@ -590,6 +668,7 @@ public final class AlvrVideoStreamSender: @unchecked Sendable {
     }
 
     private func drainUplink() {
+        guard !socketClosed else { return }
         var buffer = [UInt8](repeating: 0, count: transport == .tcp ? 64 * 1024 : 2_048)
         while true {
             let count = recv(socket, &buffer, buffer.count, 0)
@@ -627,6 +706,7 @@ public final class AlvrVideoStreamSender: @unchecked Sendable {
     }
 
     private func drainTCPFrames() {
+        defer { tcpReceiveBuffer.releaseRemovedPrefix() }
         while tcpReceiveBuffer.count >= 4 {
             let prefix = tcpReceiveBuffer.prefix(4)
             let payloadLength = prefix.reduce(0) { ($0 << 8) | Int($1) }
@@ -674,6 +754,7 @@ public final class AlvrVideoStreamSender: @unchecked Sendable {
     /// partial length-framed shard would desynchronize the whole USB stream.
     private func sendShard(_ shard: Data, deadline: UInt64,
                            reportsVideoCongestion: Bool = true) throws -> Bool {
+        guard !socketClosed else { return false }
         if transport == .udp {
             let count = shard.withUnsafeBytes {
                 Darwin.send(socket, $0.baseAddress, shard.count, 0)
@@ -702,8 +783,8 @@ public final class AlvrVideoStreamSender: @unchecked Sendable {
             }
             if count < 0, errno == EINTR { continue }
             if count < 0, errno == EAGAIN || errno == EWOULDBLOCK {
-                let remaining = deadline > DispatchTime.now().uptimeNanoseconds
-                    ? deadline - DispatchTime.now().uptimeNanoseconds : 0
+                let now = DispatchTime.now().uptimeNanoseconds
+                let remaining = deadline > now ? deadline - now : 0
                 guard remaining > 0 else {
                     throw BasaltError("Timed out writing one ALVR USB video access unit")
                 }
@@ -726,6 +807,7 @@ public final class AlvrVideoStreamSender: @unchecked Sendable {
         transportFailed = true
         stateLock.unlock()
         guard !wasFailed else { return }
+        trackingWatchdog?.cancel()
         Darwin.shutdown(socket, SHUT_RDWR)
         readSource?.cancel()
     }
@@ -752,7 +834,26 @@ public final class AlvrVideoStreamRouter: @unchecked Sendable {
     private var sender: AlvrVideoStreamSender?
     private var controlSession: AlvrSessionHandshakeResult?
 
-    public init() {}
+    private let codec: VideoCodec
+
+    public init(codec: VideoCodec = .h264) { self.codec = codec }
+
+    public var hasSender: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return sender != nil
+    }
+
+    /// Identity checking keeps a delayed old disconnect from removing a new session.
+    public func uninstall(_ expectedSender: AlvrVideoStreamSender) {
+        lock.lock()
+        if sender === expectedSender {
+            sender = nil
+            controlSession = nil
+        }
+        lock.unlock()
+        expectedSender.stop()
+    }
 
     public func install(_ sender: AlvrVideoStreamSender,
                         controlSession: AlvrSessionHandshakeResult) {
@@ -771,8 +872,8 @@ public final class AlvrVideoStreamRouter: @unchecked Sendable {
         let sender = self.sender
         let controlSession = self.controlSession
         lock.unlock()
-        if isIDR, let parameterSets = H264ParameterSets.extract(from: annexB) {
-            controlSession?.sendH264DecoderConfig(parameterSets)
+        if isIDR, let parameterSets = VideoParameterSets.extract(from: annexB, codec: codec) {
+            controlSession?.sendDecoderConfig(parameterSets, codec: codec)
         }
         guard let sender,
               let timestamp = suppliedTimestamp ?? sender.timestampForVideoFrame() else { return }
@@ -789,35 +890,7 @@ public final class AlvrVideoStreamRouter: @unchecked Sendable {
 }
 
 public enum H264ParameterSets {
-    /// Extracts SPS (type 7) and PPS (type 8) NAL units, preserving Annex-B
-    /// start codes for ALVR's MediaCodec initialization buffer.
     public static func extract(from annexB: Data) -> Data? {
-        let bytes = [UInt8](annexB)
-        var starts = [(offset: Int, codeLength: Int)]()
-        var index = 0
-        while index + 3 <= bytes.count {
-            if index + 4 <= bytes.count,
-               bytes[index...index + 3].elementsEqual([0, 0, 0, 1]) {
-                starts.append((index, 4))
-                index += 4
-            } else if bytes[index...index + 2].elementsEqual([0, 0, 1]) {
-                starts.append((index, 3))
-                index += 3
-            } else {
-                index += 1
-            }
-        }
-
-        var result = Data()
-        for (position, start) in starts.enumerated() {
-            let naluStart = start.offset + start.codeLength
-            let naluEnd = position + 1 < starts.count ? starts[position + 1].offset : bytes.count
-            guard naluStart < naluEnd else { continue }
-            let type = bytes[naluStart] & 0x1F
-            guard type == 7 || type == 8 else { continue }
-            result.append(contentsOf: [0, 0, 0, 1])
-            result.append(contentsOf: bytes[naluStart..<naluEnd])
-        }
-        return result.isEmpty ? nil : result
+        VideoParameterSets.extract(from: annexB, codec: .h264)
     }
 }

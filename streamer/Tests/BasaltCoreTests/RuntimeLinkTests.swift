@@ -1,3 +1,4 @@
+import CoreVideo
 import XCTest
 @testable import BasaltCore
 
@@ -14,6 +15,85 @@ final class RuntimeLinkTests: XCTestCase {
             "4321 \(token)\n")
     }
 
+    func testControlFileRateIsTrailingAndInvisibleToLegacyReader() {
+        let token = String(repeating: "a", count: 32)
+        for rate: Float in [72, 90, 120, 89.999] {
+            for size: PerEyeResolution? in [.balanced, nil] {
+                let line = RuntimeLink.controlFileLine(
+                    port: 4321, token: token, recommendedViewSize: size,
+                    negotiatedRefreshRate: rate)
+                let expected = "4321 \(token) \(size?.width ?? 0) \(size?.height ?? 0)"
+                // Old control.cpp reads 127 bytes, then sscanf rejects any
+                // fifth field. Verify that prefix contains only four fields.
+                XCTAssertEqual(String(line.prefix(127)).split(whereSeparator: \.isWhitespace),
+                               expected.split(whereSeparator: \.isWhitespace))
+                XCTAssertEqual(String(line.dropFirst(128)),
+                               "\(Int((Double(rate) * 1_000).rounded()))\n")
+                XCTAssertEqual(line.split(whereSeparator: \.isWhitespace).count, 5)
+            }
+        }
+    }
+
+    func testControlFileUsesNegotiationInsteadOfRequestedRate() throws {
+        let capabilities = AlvrVideoCapabilities(
+            width: 1680, height: 1760, refreshRates: [72, 90, 120],
+            microphoneSampleRate: 44_100, supportsFoveatedEncoding: true,
+            supportsHighProfile: true, supports10Bit: true, supportsAV1: true,
+            prefers10Bit: false, prefersFullRange: true,
+            preferredEncodingGamma: 1, prefersHDR: false)
+        let negotiated = try AlvrNegotiatedSettings.desktopPreviewDefaults(
+            for: capabilities, requestedWidth: 1152, requestedHeight: 1216,
+            preferredRefreshRate: 85)
+        XCTAssertEqual(negotiated.refreshRate, 90)
+        let line = RuntimeLink.controlFileLine(
+            port: 4321, token: String(repeating: "a", count: 32),
+            recommendedViewSize: .balanced,
+            negotiatedRefreshRate: negotiated.refreshRate)
+        XCTAssertTrue(line.hasSuffix("90000\n"))
+    }
+
+    func testHeadsetControlFileWaitsForNegotiatedRate() async throws {
+        let path = FileManager.default.temporaryDirectory
+            .appendingPathComponent("basalt-\(UUID().uuidString).control").path
+        let link = try RuntimeLink(
+            controlFilePath: path, recommendedViewSize: .balanced,
+            waitForNegotiatedRefreshRate: true)
+        defer { link.stop(); try? FileManager.default.removeItem(atPath: path) }
+        try await link.start()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: path))
+        try await link.configureRefreshRate(90)
+        let line = try String(contentsOfFile: path, encoding: .utf8)
+        XCTAssertEqual(line.split(whereSeparator: \.isWhitespace).last, "90000")
+        let attributes = try FileManager.default.attributesOfItem(atPath: path)
+        XCTAssertEqual((attributes[.posixPermissions] as? NSNumber)?.intValue, 0o600)
+        try await link.configureRefreshRate(90)
+        let unchanged = try FileManager.default.attributesOfItem(atPath: path)
+        XCTAssertEqual(attributes[.systemFileNumber] as? NSNumber,
+                       unchanged[.systemFileNumber] as? NSNumber)
+        XCTAssertEqual(attributes[.modificationDate] as? Date,
+                       unchanged[.modificationDate] as? Date)
+        // A replacement handshake atomically replaces the complete file.
+        try await link.configureRefreshRate(120)
+        XCTAssertTrue(try String(contentsOfFile: path, encoding: .utf8).hasSuffix("120000\n"))
+    }
+
+    func testNegotiatedRateBeforeListenerStartAndValidation() async throws {
+        let path = FileManager.default.temporaryDirectory
+            .appendingPathComponent("basalt-\(UUID().uuidString).control").path
+        let link = try RuntimeLink(controlFilePath: path, waitForNegotiatedRefreshRate: true)
+        defer { link.stop(); try? FileManager.default.removeItem(atPath: path) }
+        for invalid: Float in [.nan, .infinity, 0, -1, 241] {
+            do {
+                try await link.configureRefreshRate(invalid)
+                XCTFail("Accepted invalid negotiated rate")
+            } catch { }
+        }
+        try await link.configureRefreshRate(90)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: path))
+        try await link.start()
+        XCTAssertTrue(try String(contentsOfFile: path, encoding: .utf8).hasSuffix("90000\n"))
+    }
+
     func testRejectsViewSizesTheRuntimeWouldIgnore() throws {
         let path = FileManager.default.temporaryDirectory
             .appendingPathComponent("basalt-\(UUID().uuidString).control").path
@@ -21,9 +101,14 @@ final class RuntimeLinkTests: XCTestCase {
             controlFilePath: path,
             recommendedViewSize: try PerEyeResolution(
                 width: RuntimeLink.maximumViewWidth, height: RuntimeLink.maximumViewHeight)))
-        XCTAssertThrowsError(try RuntimeLink(
-            controlFilePath: path,
-            recommendedViewSize: try PerEyeResolution(width: 1_920, height: 1_920)))
+        // Quest 3's own panel size and above, which the 1680x1760 runtime refused.
+        XCTAssertNoThrow(try RuntimeLink(
+            controlFilePath: path, recommendedViewSize: try PerEyeResolution(width: 2_064, height: 2_208)))
+        XCTAssertNoThrow(try RuntimeLink(
+            controlFilePath: path, recommendedViewSize: try PerEyeResolution(width: 3_072, height: 3_280)))
+        // Nothing larger can even be asked for.
+        XCTAssertThrowsError(try PerEyeResolution(width: RuntimeLink.maximumViewWidth + 2, height: 2_208))
+        XCTAssertEqual(PerEyeResolution.dimensionRange.upperBound, RuntimeLink.maximumViewWidth)
     }
 
     /// RuntimeLink mirrors basalt_control_protocol.h by hand. A drifted
@@ -59,6 +144,8 @@ final class RuntimeLinkTests: XCTestCase {
         XCTAssertEqual(defines["MIN_VIEW_DIMENSION"], PerEyeResolution.dimensionRange.lowerBound)
         XCTAssertEqual(defines["MAX_VIEW_WIDTH"], RuntimeLink.maximumViewWidth)
         XCTAssertEqual(defines["MAX_VIEW_HEIGHT"], RuntimeLink.maximumViewHeight)
+        XCTAssertEqual(defines["DEFAULT_VIEW_WIDTH"], RuntimeLink.defaultViewWidth)
+        XCTAssertEqual(defines["DEFAULT_VIEW_HEIGHT"], RuntimeLink.defaultViewHeight)
 
         // BASALT_MSG_HELLO_ACK = 2 must mirror `case helloAck = 2`.
         let headerMessages = try values(#"BASALT_MSG_([A-Z_]+) = ([0-9]+),"#)
@@ -78,19 +165,20 @@ final class RuntimeLinkTests: XCTestCase {
         XCTAssertEqual(swiftMessages, camelCasedHeader)
     }
 
-    func testOnlyCoreVideoCompatibleBGRAIsStreamable() {
-        let bgraFourCC: UInt32 = 0x4247_5241
-        let rgbaFourCC: UInt32 = 0x5247_4241
-        XCTAssertTrue(RuntimeLink.isStreamableSwapchainFormat(
-            dxgiFormat: 87, iosurfacePixelFormat: bgraFourCC))
-        XCTAssertTrue(RuntimeLink.isStreamableSwapchainFormat(
-            dxgiFormat: 91, iosurfacePixelFormat: bgraFourCC))
-        XCTAssertFalse(RuntimeLink.isStreamableSwapchainFormat(
-            dxgiFormat: 28, iosurfacePixelFormat: rgbaFourCC))
-        XCTAssertFalse(RuntimeLink.isStreamableSwapchainFormat(
-            dxgiFormat: 28, iosurfacePixelFormat: bgraFourCC))
-        XCTAssertFalse(RuntimeLink.isStreamableSwapchainFormat(
-            dxgiFormat: 87, iosurfacePixelFormat: rgbaFourCC))
+    func testStreamableFormatsRequireMatchingIOSurfaceChannelLayout() {
+        let formats: [(UInt32, OSType?)] = [
+            (87, kCVPixelFormatType_32BGRA), (91, kCVPixelFormatType_32BGRA),
+            (28, kCVPixelFormatType_32RGBA), (29, kCVPixelFormatType_32RGBA),
+            (27, nil), (90, nil), (0, nil),
+        ]
+        for (dxgi, expectedPixelFormat) in formats {
+            for pixelFormat in [kCVPixelFormatType_32BGRA, kCVPixelFormatType_32RGBA, 0] {
+                XCTAssertEqual(RuntimeLink.isStreamableSwapchainFormat(
+                    dxgiFormat: dxgi, iosurfacePixelFormat: pixelFormat),
+                    pixelFormat == expectedPixelFormat,
+                    "DXGI \(dxgi), IOSurface \(pixelFormat)")
+            }
+        }
     }
 
     func testFrameReadyHeaderPreservesExactQuestTrackingTimestamp() throws {
@@ -329,6 +417,57 @@ final class RuntimeLinkTests: XCTestCase {
 
         // The silent connection was closed by the Hello deadline.
         XCTAssertNil(try Self.receiveMessageType(from: silent))
+    }
+
+    func testWiredReconnectKeepsIdleRuntimeAliveAndStopsResettingAfterInstall() async throws {
+        let path = FileManager.default.temporaryDirectory
+            .appendingPathComponent("basalt-\(UUID().uuidString).control").path
+        let link = try RuntimeLink(controlFilePath: path,
+            keepAliveWithoutTracking: true)
+        try await link.start()
+        defer { link.stop() }
+        // The headset's view configuration arrives with its handshake, before
+        // the game connects; the keepalive repeats it.
+        link.publishViewsConfig(AlvrViewsConfig(
+            ipdMeters: 0.0625,
+            fov: [
+                AlvrFov(left: -0.91, right: 0.83, up: 0.88, down: -0.84),
+                AlvrFov(left: -0.82, right: 0.92, up: 0.89, down: -0.85),
+            ]))
+        let fields = try String(contentsOfFile: path, encoding: .utf8).split(whereSeparator: \.isWhitespace)
+        let peer = try Self.connectLoopback(port: try XCTUnwrap(UInt16(fields[0])))
+        defer { close(peer) }
+        try Self.sendHello(on: peer, token: String(fields[1]), sessionId: 1)
+        XCTAssertEqual(try Self.receiveMessageType(from: peer), RuntimeLink.MessageType.helloAck.rawValue)
+        // No frames or headset samples for longer than the PE read timeout.
+        // Only the harmless view configuration may be repeated: an input
+        // reset would clear the controllers' profile and held buttons.
+        for _ in 0..<6 {
+            XCTAssertEqual(try Self.receiveMessageType(from: peer), RuntimeLink.MessageType.viewConfig.rawValue)
+        }
+        for timestamp: UInt64 in 1...2 {
+            link.publishHeadPose(timestampNanoseconds: timestamp, pose: AlvrHeadPose(
+                orientationX: 0, orientationY: 0, orientationZ: 0, orientationW: 1,
+                positionX: 0, positionY: 0, positionZ: 0))
+            XCTAssertEqual(try Self.receiveMessageType(from: peer), RuntimeLink.MessageType.headPose.rawValue)
+            var descriptor = pollfd(fd: peer, events: Int16(POLLIN), revents: 0)
+            XCTAssertEqual(poll(&descriptor, 1, 600), 0)
+        }
+    }
+
+    func testDefaultRuntimeLinkDoesNotSendWiredIdlePackets() async throws {
+        let path = FileManager.default.temporaryDirectory
+            .appendingPathComponent("basalt-\(UUID().uuidString).control").path
+        let link = try RuntimeLink(controlFilePath: path)
+        try await link.start()
+        defer { link.stop() }
+        let fields = try String(contentsOfFile: path, encoding: .utf8).split(whereSeparator: \.isWhitespace)
+        let peer = try Self.connectLoopback(port: try XCTUnwrap(UInt16(fields[0])))
+        defer { close(peer) }
+        try Self.sendHello(on: peer, token: String(fields[1]), sessionId: 1)
+        XCTAssertEqual(try Self.receiveMessageType(from: peer), RuntimeLink.MessageType.helloAck.rawValue)
+        var descriptor = pollfd(fd: peer, events: Int16(POLLIN), revents: 0)
+        XCTAssertEqual(poll(&descriptor, 1, 1_200), 0)
     }
 
     private static func connectLoopback(port: UInt16) throws -> Int32 {

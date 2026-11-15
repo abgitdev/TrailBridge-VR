@@ -29,21 +29,26 @@ public enum RepositoryLocator {
     }
 
     private static func isRepository(_ url: URL, fileManager: FileManager) -> Bool {
-        let sourceLayout =
-            fileManager.fileExists(
-                atPath: url.appendingPathComponent("runtime/CMakeLists.txt").path)
-            && fileManager.fileExists(atPath: url.appendingPathComponent("streamer/Package.swift").path)
-        let packagedLayout =
-            fileManager.fileExists(
-                atPath: url.appendingPathComponent("BasaltVR.support.json").path)
-            && fileManager.fileExists(
-                atPath: url.appendingPathComponent(
-                    "runtime/build/bin/basalt_openxr.dll").path)
-            && fileManager.fileExists(
-                atPath: url.appendingPathComponent(
-                    "runtime/build/bin/basalt_openxr.json").path)
-            && fileManager.fileExists(
-                atPath: url.appendingPathComponent("docs/BOTTLES.md").path)
-        return sourceLayout || packagedLayout
+        hasSourceLayout(url, fileManager: fileManager)
+            || hasPackagedLayout(url, fileManager: fileManager)
     }
+
+    /// A source checkout: the runtime and the Swift package are there.
+    public static func hasSourceLayout(_ url: URL, fileManager: FileManager = .default) -> Bool {
+        fileManager.fileExists(atPath: url.appendingPathComponent("runtime/CMakeLists.txt").path)
+            && fileManager.fileExists(atPath: url.appendingPathComponent("streamer/Package.swift").path)
+    }
+
+    /// The support files a packaged app carries in place of a checkout.
+    public static func hasPackagedLayout(_ url: URL, fileManager: FileManager = .default) -> Bool {
+        fileManager.fileExists(atPath: url.appendingPathComponent(packagedMarker).path)
+            && fileManager.fileExists(
+                atPath: url.appendingPathComponent("runtime/build/bin/basalt_openxr.dll").path)
+            && fileManager.fileExists(
+                atPath: url.appendingPathComponent("runtime/build/bin/basalt_openxr.json").path)
+            && fileManager.fileExists(atPath: url.appendingPathComponent("docs/BOTTLES.md").path)
+    }
+
+    /// The file that marks a folder as packaged support files.
+    public static let packagedMarker = "BasaltVR.support.json"
 }

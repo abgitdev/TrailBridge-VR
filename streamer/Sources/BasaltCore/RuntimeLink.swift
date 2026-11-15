@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 import Network
 import IOSurface
 import CoreVideo
@@ -8,7 +9,7 @@ import Security
 /// (docs/DXMT-INTEROP.md §4; wire format in runtime/pe/basalt_control_protocol.h,
 /// mirrored here because the constants are trivially small).
 ///
-/// Listens on loopback, writes "<port> <token> <width> <height>" to the control file the
+/// Listens on loopback, writes "<port> <token> [<width> <height> [<millihertz>]]" to the control file the
 /// launcher hands the game bottle via BASALT_CONTROL, validates the Hello
 /// token, retains every registered swapchain IOSurface (IDs are untrusted:
 /// dimensions are re-checked after lookup), and surfaces fence-confirmed
@@ -65,8 +66,12 @@ public final class RuntimeLink: @unchecked Sendable {
     static let tokenLength = 32
     static let maxMessageLength = 4096
     /// The runtime's largest per-eye view; it ignores a larger configured size.
-    public static let maximumViewWidth = 1680
-    public static let maximumViewHeight = 1760
+    /// What a Mac can render and encode and a headset decode is chosen below it.
+    public static let maximumViewWidth = 4096
+    public static let maximumViewHeight = 4096
+    /// What the runtime recommends to a game when no valid size is configured.
+    public static let defaultViewWidth = 1680
+    public static let defaultViewHeight = 1760
     static let maximumRetainedButtonPaths = 64
     /// The runtime's view-config bounds (parseViewConfig in
     /// runtime/pe/control.cpp). It treats a value outside them as a corrupt
@@ -127,14 +132,33 @@ public final class RuntimeLink: @unchecked Sendable {
 
     private let controlFilePath: String
     private let recommendedViewSize: PerEyeResolution?
+    private let waitForNegotiatedRefreshRate: Bool
+    private let keepAliveWithoutTracking: Bool
+    private var idleTimer: DispatchSourceTimer?
+    private var lastHeadPoseArrival: UInt64 = 0
+    // Confined to queue. The file is the launcher's readiness signal.
+    private var negotiatedRefreshRate: Float?
+    private var listenerReady = false
     private let queue = DispatchQueue(label: "basalt.runtime-link")
     private let listener: NWListener
     private var connection: NWConnection?
     private var receiveBuffer = Data()
     /// Connections that have not yet sent an authenticated Hello. They never
     /// receive runtime state, and each is dropped after `helloTimeout`.
-    private var candidates: [(connection: NWConnection, buffer: Data)] = []
-    static let maximumCandidateConnections = 4
+    private var candidates: [(connection: NWConnection, buffer: Data, serial: UInt64)] = []
+    /// When more are waiting, the oldest goes: the runtime sends its Hello
+    /// right after connecting, so a silent connection cannot keep it out.
+    static let maximumCandidateConnections = 16
+    /// Every connection the listener has handed over that has neither
+    /// authenticated nor finished closing. Closing takes the system a moment,
+    /// so without this count a local process that connects in a loop piles up
+    /// thousands of half-closed sockets; at the limit the listener hands over
+    /// no more until some are gone.
+    private var unauthenticatedConnections = Set<UInt64>()
+    private var lastConnectionSerial: UInt64 = 0
+    static let maximumUnauthenticatedConnections = 48
+    /// The runtime sends its adapter description, at most 127 characters.
+    static let maximumRendererTextLength = 128
     var helloTimeout: DispatchTimeInterval = .seconds(5)
     private var helloDone = false
     private var swapchains: [UInt64: Swapchain] = [:]
@@ -156,7 +180,9 @@ public final class RuntimeLink: @unchecked Sendable {
 
     public init(
         controlFilePath: String,
-        recommendedViewSize: PerEyeResolution? = nil
+        recommendedViewSize: PerEyeResolution? = nil,
+        waitForNegotiatedRefreshRate: Bool = false,
+        keepAliveWithoutTracking: Bool = false
     ) throws {
         if let size = recommendedViewSize,
            size.width > Self.maximumViewWidth || size.height > Self.maximumViewHeight {
@@ -168,6 +194,8 @@ public final class RuntimeLink: @unchecked Sendable {
         }
         self.controlFilePath = controlFilePath
         self.recommendedViewSize = recommendedViewSize
+        self.waitForNegotiatedRefreshRate = waitForNegotiatedRefreshRate
+        self.keepAliveWithoutTracking = keepAliveWithoutTracking
         // FrameConsumed gates the game's xrWaitFrame; never let Nagle hold
         // the tiny ack behind an unacknowledged pose write.
         let tcp = NWProtocolTCP.Options()
@@ -178,8 +206,12 @@ public final class RuntimeLink: @unchecked Sendable {
         listener = try NWListener(using: parameters)
     }
 
-    /// Binds, writes the control file, and begins accepting the runtime.
+    /// Binds and accepts the runtime; publishes readiness immediately unless
+    /// this link is waiting for the negotiated headset rate.
     public func start() async throws {
+        if FileManager.default.fileExists(atPath: controlFilePath) {
+            try FileManager.default.removeItem(atPath: controlFilePath)
+        }
         var tokenBytes = [UInt8](repeating: 0, count: Self.tokenLength / 2)
         guard SecRandomCopyBytes(kSecRandomDefault, tokenBytes.count, &tokenBytes)
                 == errSecSuccess else {
@@ -189,7 +221,7 @@ public final class RuntimeLink: @unchecked Sendable {
 
         try await withCheckedThrowingContinuation {
             (continuation: CheckedContinuation<Void, Error>) in
-            queue.async {
+            queue.async { [self] in
                 var finished = false
                 self.listener.newConnectionHandler = { [weak self] newConnection in
                     self?.accept(newConnection)
@@ -203,24 +235,9 @@ public final class RuntimeLink: @unchecked Sendable {
                             guard let port = self.listener.port?.rawValue else {
                                 throw BasaltError("runtime link has no bound port")
                             }
-                            // The token is the only authentication for the
-                            // loopback control socket, so the file that carries
-                            // it must not be world-readable (the launcher points
-                            // BASALT_CONTROL at it, often under /tmp). Create it
-                            // 0600 in one step so it is never briefly exposed.
-                            try? FileManager.default.removeItem(
-                                atPath: self.controlFilePath)
-                            let controlLine = Self.controlFileLine(
-                                port: port, token: self.token,
-                                recommendedViewSize: self.recommendedViewSize)
-                            guard FileManager.default.createFile(
-                                atPath: self.controlFilePath,
-                                contents: Data(controlLine.utf8),
-                                attributes: [.posixPermissions: 0o600]) else {
-                                throw BasaltError(
-                                    "Could not write runtime control file at "
-                                    + self.controlFilePath)
-                            }
+                            self.listenerReady = true
+                            try self.writeControlFile(port: port)
+                            self.startIdleTimer()
                             continuation.resume()
                         } catch {
                             continuation.resume(throwing: error)
@@ -237,25 +254,111 @@ public final class RuntimeLink: @unchecked Sendable {
         }
     }
 
+    /// Called only with the rate returned by ALVR negotiation. In headset
+    /// mode no control file is published until this succeeds, so a launcher
+    /// cannot start the game with the CLI request or an assumed 72 Hz.
+    public func configureRefreshRate(_ rate: Float) async throws {
+        guard rate.isFinite, rate >= 0.001, rate <= 240 else {
+            throw BasaltError("Invalid negotiated refresh rate")
+        }
+        try await withCheckedThrowingContinuation {
+            (continuation: CheckedContinuation<Void, Error>) in
+            queue.async {
+                guard self.negotiatedRefreshRate != rate else {
+                    continuation.resume()
+                    return
+                }
+                let previousRate = self.negotiatedRefreshRate
+                self.negotiatedRefreshRate = rate
+                do {
+                    if self.listenerReady, let port = self.listener.port?.rawValue {
+                        try self.writeControlFile(port: port)
+                    }
+                    continuation.resume()
+                } catch {
+                    self.negotiatedRefreshRate = previousRate
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+
+    private func writeControlFile(port: UInt16) throws {
+        guard !waitForNegotiatedRefreshRate || negotiatedRefreshRate != nil else { return }
+        let line = Self.controlFileLine(
+            port: port, token: token, recommendedViewSize: recommendedViewSize,
+            negotiatedRefreshRate: negotiatedRefreshRate)
+        // Publish a complete 0600 file by same-directory atomic rename. This
+        // preserves the token's permissions even on the first publication.
+        let temporaryPath = controlFilePath + "." + UUID().uuidString + ".tmp"
+        defer { try? FileManager.default.removeItem(atPath: temporaryPath) }
+        guard FileManager.default.createFile(
+            atPath: temporaryPath, contents: Data(line.utf8),
+            attributes: [.posixPermissions: 0o600]),
+            rename(temporaryPath, controlFilePath) == 0 else {
+            throw BasaltError("Could not publish runtime control file at " + controlFilePath)
+        }
+    }
+
     static func controlFileLine(
         port: UInt16,
         token: String,
-        recommendedViewSize: PerEyeResolution?
+        recommendedViewSize: PerEyeResolution?,
+        negotiatedRefreshRate: Float? = nil
     ) -> String {
-        guard let size = recommendedViewSize else {
-            return "\(port) \(token)\n"
+        var line = "\(port) \(token)"
+        if let size = recommendedViewSize {
+            line += " \(size.width) \(size.height)"
+        } else if negotiatedRefreshRate != nil {
+            // Keep field positions fixed; zero dimensions retain the runtime's
+            // default view size, including with an older DLL.
+            line += " 0 0"
         }
-        return "\(port) \(token) \(size.width) \(size.height)\n"
+        if let rate = negotiatedRefreshRate {
+            precondition(rate.isFinite && rate >= 0.001 && rate <= 240)
+            // The v9 DLL reads at most 127 bytes and rejects a fifth field.
+            // Start the extension at byte 128: its sscanf still sees exactly
+            // four fields; newer DLLs read the entire whitespace-separated line.
+            line += String(repeating: " ", count: max(1, 128 - line.utf8.count))
+            line += "\(Int((Double(rate) * 1_000).rounded()))"
+        }
+        return line + "\n"
     }
 
     public func stop() {
         queue.async {
+            self.idleTimer?.cancel()
+            self.idleTimer = nil
             for candidate in self.candidates { candidate.connection.cancel() }
             self.candidates.removeAll()
             self.dropConnection()
             self.listener.cancel()
             try? FileManager.default.removeItem(atPath: self.controlFilePath)
         }
+    }
+
+    /// The PE receiver has a five-second socket read timeout. While the
+    /// headset is away (USB or Wi-Fi reconnecting, headset asleep), a game
+    /// submitting no frames receives neither poses nor
+    /// FrameConsumed, and would permanently fail that receiver. Repeat the
+    /// last view configuration: the runtime stores the same values again, so
+    /// the packet changes nothing. InputReset must not be used here: it also
+    /// clears the controllers' interaction profile and button states, which
+    /// the headset sends only once or on change, so a one-second tracking
+    /// pause would leave the controllers dead for the rest of the session.
+    /// The streamer enables it on both transports. Fresh tracking suppresses
+    /// the packets.
+    private func startIdleTimer() {
+        guard keepAliveWithoutTracking else { return }
+        let source = DispatchSource.makeTimerSource(queue: queue)
+        source.schedule(deadline: .now() + .seconds(1), repeating: .seconds(1))
+        source.setEventHandler { [weak self] in
+            guard let self, self.helloDone, let payload = self.latestViewConfigPayload,
+                  DispatchTime.now().uptimeNanoseconds - self.lastHeadPoseArrival >= 1_000_000_000 else { return }
+            self.send(type: .viewConfig, payload: payload)
+        }
+        idleTimer = source
+        source.resume()
     }
 
     /// Publishes ALVR's latest pre-predicted OpenXR head pose. The Quest
@@ -268,6 +371,7 @@ public final class RuntimeLink: @unchecked Sendable {
             return
         }
         queue.async {
+            self.lastHeadPoseArrival = DispatchTime.now().uptimeNanoseconds
             self.pendingHeadPose = payload
             self.pumpHeadPose()
         }
@@ -495,18 +599,32 @@ public final class RuntimeLink: @unchecked Sendable {
     // MARK: - connection handling (all on `queue`)
 
     private func accept(_ newConnection: NWConnection) {
+        lastConnectionSerial += 1
+        let serial = lastConnectionSerial
+        unauthenticatedConnections.insert(serial)
+        updateNewConnectionLimit()
         // Unauthenticated connections cannot hold a slot the runtime needs:
         // the oldest is dropped when too many are waiting for their Hello.
         if candidates.count >= Self.maximumCandidateConnections {
             dropCandidate(candidates[0].connection)
         }
-        candidates.append((newConnection, Data()))
+        candidates.append((newConnection, Data(), serial))
         newConnection.stateUpdateHandler = { [weak self, weak newConnection] state in
-            guard case .failed = state, let self, let newConnection else { return }
-            self.dropCandidate(newConnection)
-            // A replaced connection's late failure must not drop its
-            // successor (e.g. a quick OpenXR session restart).
-            self.onQueue(ifCurrent: newConnection) { self.dropConnection() }
+            guard let self else { return }
+            switch state {
+            case .cancelled:
+                // The socket is closed: the connection no longer counts.
+                self.unauthenticatedConnections.remove(serial)
+                self.updateNewConnectionLimit()
+            case .failed:
+                guard let newConnection else { return }
+                self.dropCandidate(newConnection)
+                // A replaced connection's late failure must not drop its
+                // successor (e.g. a quick OpenXR session restart).
+                self.onQueue(ifCurrent: newConnection) { self.dropConnection() }
+            default:
+                break
+            }
         }
         queue.asyncAfter(deadline: .now() + helloTimeout) { [weak self, weak newConnection] in
             guard let self, let newConnection else { return }
@@ -514,6 +632,11 @@ public final class RuntimeLink: @unchecked Sendable {
         }
         newConnection.start(queue: queue)
         receiveHello(on: newConnection)
+    }
+
+    private func updateNewConnectionLimit() {
+        listener.newConnectionLimit = max(
+            0, Self.maximumUnauthenticatedConnections - unauthenticatedConnections.count)
     }
 
     private func dropCandidate(_ candidate: NWConnection) {
@@ -543,6 +666,7 @@ public final class RuntimeLink: @unchecked Sendable {
             case .invalid:
                 self.dropCandidate(candidate)
             case .hello(let payload, let remaining):
+                let serial = self.candidates[index].serial
                 self.candidates.remove(at: index)
                 let verdict = Self.helloVerdict(payload, token: self.token)
                 guard case .accept(let sessionId, let renderer) = verdict else {
@@ -550,6 +674,8 @@ public final class RuntimeLink: @unchecked Sendable {
                     candidate.cancel()
                     return
                 }
+                self.unauthenticatedConnections.remove(serial)
+                self.updateNewConnectionLimit()
                 self.promote(candidate, sessionId: sessionId, renderer: renderer,
                              remaining: remaining)
                 if isComplete || error != nil {
@@ -800,10 +926,14 @@ public final class RuntimeLink: @unchecked Sendable {
                 + Int(payload.readU16(at: 2 + tokenLength + 8)) else {
             return .refuse("runtime sent a malformed Hello")
         }
+        // The renderer text goes to the session log, which the manager reads
+        // line by line: it must not be able to start a line of its own.
         return .accept(
             sessionId: payload.readU64(at: 2 + tokenLength),
-            renderer: String(data: payload.subdata(in: headerLength..<payload.count),
-                             encoding: .utf8) ?? "")
+            renderer: AlvrClientConnectionDecoder.printableText(
+                String(data: payload.subdata(in: headerLength..<payload.count),
+                       encoding: .utf8) ?? "",
+                maximumLength: maximumRendererTextLength))
     }
 
     private func handleCreateSwapchain(_ payload: Data) -> Bool {
@@ -814,9 +944,6 @@ public final class RuntimeLink: @unchecked Sendable {
         let format = payload.readU32(at: 16)
         let imageCount = payload.readU32(at: 20)
         guard imageCount > 0, imageCount <= 8,
-              Self.isStreamableSwapchainFormat(
-                  dxgiFormat: format,
-                  iosurfacePixelFormat: kCVPixelFormatType_32BGRA),
               payload.count == 24 + Int(imageCount) * 4,
               swapchains[id] == nil else {
             return false
@@ -938,12 +1065,18 @@ public final class RuntimeLink: @unchecked Sendable {
             viewCount: viewCount)
     }
 
-    /// The current native compose/encode path is zero-copy BGRA. DXMT can
-    /// allocate RGBA IOSurfaces, but CoreVideo cannot wrap that layout.
+    /// BGRA uses CoreVideo's zero-copy Metal view; RGBA uses an IOSurface
+    /// Metal view directly. Both require the matching DXGI channel layout.
     static func isStreamableSwapchainFormat(
             dxgiFormat: UInt32, iosurfacePixelFormat: OSType) -> Bool {
-        let isBgraDxgi = dxgiFormat == 87 || dxgiFormat == 91
-        return isBgraDxgi && iosurfacePixelFormat == kCVPixelFormatType_32BGRA
+        switch dxgiFormat {
+        case 87, 91:
+            return iosurfacePixelFormat == kCVPixelFormatType_32BGRA
+        case 28, 29:
+            return iosurfacePixelFormat == kCVPixelFormatType_32RGBA
+        default:
+            return false
+        }
     }
 
     private func handleHaptic(_ payload: Data) -> Bool {

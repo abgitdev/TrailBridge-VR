@@ -19,12 +19,16 @@ public final class SessionConsole: ObservableObject {
     public static let maximumPartialLineBytes = 16_384
 
     @Published public private(set) var log = ""
+    @Published public private(set) var headsetDisconnected = false
     /// Every metric sample since the session started.
     @Published public private(set) var samples = [StreamMetricSample]()
     /// One pending partial line per output source (each process pipe, or
     /// nil for the app's own messages), so concurrent outputs never splice
     /// into each other mid-line.
     private var partialLines = [ObjectIdentifier?: String]()
+    private var deviceErrorCounts = [ObjectIdentifier?: Int]()
+    private var transcript: ConsoleTranscript?
+    private var transcriptsBySource = [ObjectIdentifier: ConsoleTranscript]()
 
     public init() {}
 
@@ -43,10 +47,21 @@ public final class SessionConsole: ObservableObject {
     }
 
     /// Starts a new log. A stream session also clears the samples; a Windows
-    /// utility keeps the last stream's charts.
-    public func restart(with firstLine: String = "", clearingSamples: Bool = true) {
+    /// utility keeps the last stream's charts. The transcript file gets the
+    /// same redaction as an exported log; the log on screen stays as it is.
+    public func restart(with firstLine: String = "", clearingSamples: Bool = true,
+                        transcriptURL: URL? = nil, transcriptRedactor: DiagnosticRedactor? = nil) {
+        closeTranscript()
+        if let transcriptURL {
+            transcript = ConsoleTranscript(
+                url: transcriptURL,
+                redact: transcriptRedactor.map { redactor in { @Sendable text in redactor.redact(text) } })
+            transcript?.append(firstLine)
+        }
         log = firstLine
+        headsetDisconnected = false
         partialLines.removeAll()
+        deviceErrorCounts.removeAll()
         if clearingSamples { samples.removeAll() }
     }
 
@@ -65,18 +80,57 @@ public final class SessionConsole: ObservableObject {
             partial = ""
         }
         partialLines[source] = partial.isEmpty ? nil : partial
-        return commit(lines, prefix: prefix)
+        return commit(lines, from: source, prefix: prefix)
     }
 
     /// Logs and returns the unfinished line `source` left when it closed.
     public func finish(_ source: ObjectIdentifier?, prefix: String = "") -> [String] {
-        guard let partial = partialLines.removeValue(forKey: source) else { return [] }
-        return commit([partial], prefix: prefix)
+        defer {
+            if let source, let writer = transcriptsBySource.removeValue(forKey: source),
+               writer !== transcript, !transcriptsBySource.values.contains(where: { $0 === writer }) {
+                writer.finish()
+            }
+        }
+        let lines = partialLines.removeValue(forKey: source).map { [$0] } ?? []
+        let completed = commit(lines, from: source, prefix: prefix)
+        if let count = deviceErrorCounts.removeValue(forKey: source), count > 1 {
+            return completed + commit(
+                ["err:   Device error: suppressed \(count - 1) repeated command buffer failures (total)"],
+                from: source, prefix: prefix)
+        }
+        return completed
     }
 
-    private func commit(_ lines: [String], prefix: String) -> [String] {
+    private func commit(_ lines: [String], from source: ObjectIdentifier?, prefix: String) -> [String] {
         guard !lines.isEmpty else { return [] }
-        let prefixed = lines.map { prefix + $0 }
+        // Persist before the live console's flood suppression and tail trim.
+        // Every source line, including repeated GPU errors, reaches disk.
+        if let writer = source.flatMap({ transcriptsBySource[$0] }) ?? transcript {
+            writer.append(lines.map { prefix + $0 + "\n" }.joined())
+        }
+        if prefix.isEmpty {
+            for line in lines {
+                if line == "Headset disconnected; waiting for it to reconnect…" {
+                    headsetDisconnected = true
+                } else if line == "Headset reconnected" {
+                    headsetDisconnected = false
+                }
+            }
+        }
+        // A lost Metal device can reject every subsequent command buffer. Keep
+        // the first full error and logarithmically spaced counts so that this
+        // flood cannot evict the compiler errors that preceded it. Match only
+        // DXMT's raw error line, after assembling chunks and before prefixing.
+        let prefixed = lines.compactMap { line -> String? in
+            guard line.hasPrefix("err:   Device error at frame ") else { return prefix + line }
+            let count = deviceErrorCounts[source, default: 0] + 1
+            deviceErrorCounts[source] = count
+            if count == 1 { return prefix + line }
+            let repeats = count - 1
+            guard repeats & (repeats - 1) == 0 else { return nil }
+            return prefix + "err:   Device error: suppressed \(repeats) repeated command buffer failures"
+        }
+        guard !prefixed.isEmpty else { return [] }
         log += prefixed.map { $0 + "\n" }.joined()
         if log.utf8.count > Self.maximumLogBytes { trimLog() }
         return prefixed
@@ -87,6 +141,20 @@ public final class SessionConsole: ObservableObject {
         if samples.count > Self.maximumSamples {
             samples.removeFirst(samples.count - Self.maximumSamples * 9 / 10)
         }
+    }
+
+    public func closeTranscript(completion: (@Sendable () -> Void)? = nil) {
+        if let writer = transcript {
+            if let completion { writer.whenClosed(completion) }
+            if !transcriptsBySource.values.contains(where: { $0 === writer }) { writer.finish() }
+        } else {
+            completion?()
+        }
+        transcript = nil
+    }
+
+    public func registerOutputSource(_ source: ObjectIdentifier) {
+        if let transcript { transcriptsBySource[source] = transcript }
     }
 
     private func trimLog() {

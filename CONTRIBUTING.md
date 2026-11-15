@@ -1,8 +1,8 @@
-# Contributing to BasaltVR
+# Contributing to TrailBridge VR
 
-BasaltVR is an experimental Apple Silicon PCVR stack. Small, testable changes are easiest to
-review. Before opening a pull request, explain the user-visible problem, keep unrelated
-refactors separate, and add or update tests for behavior changes.
+TrailBridge VR is an experimental Apple Silicon PCVR stack based on BasaltVR. Small, testable
+changes are easiest to review. Before opening a pull request, explain the user-visible problem,
+keep unrelated refactors separate, and add or update tests for behavior changes.
 
 ## Before you start
 
@@ -20,10 +20,14 @@ The native components require macOS 14 or newer on Apple Silicon with Xcode comm
 
 ```sh
 git clone <your-fork-url>
-cd BasaltVR
-make doctor
-make check
+cd TrailBridge-VR
+./scripts/trailbridge-dev.zsh make doctor
+./scripts/trailbridge-dev.zsh make check
 ```
+
+Run development commands through `scripts/trailbridge-dev.zsh`. It keeps caches, temporary files,
+Wine test prefixes and app data in the ignored `.local/` folder of the checkout. The `make`
+commands below are shown without it for brevity.
 
 `make check` validates scripts and metadata, checks local documentation links and repository
 hygiene, runs all Swift tests, and produces an Apple Silicon release build. Use `make help` to see
@@ -86,6 +90,7 @@ as passing.
 - Do not include proprietary game files, Meta/Steam credentials, device identifiers, or logs that
   expose personal paths.
 - Call out breaking behavior, data migrations, dependency changes, and rollback considerations.
+- Keep BasaltVR's license and notices, and the notices of every third-party project.
 
 Draft pull requests are welcome for early design feedback. A pull request is ready for review when
 its description, tests, documentation, and verification checklist represent the final intended
@@ -97,7 +102,7 @@ change.
 - Prefer clear subsystem boundaries and small helpers over unrelated broad refactors.
 - Write commit subjects in the imperative mood and explain non-obvious compatibility or safety
   decisions in the body.
-- Do not commit generated build products. The ignored `streamer/.build`, `runtime/build*`, `dist`,
-  and `release` directories are disposable local state.
+- Do not commit generated build products. The ignored `streamer/.build` and `runtime/build*`
+  directories and `.local/dist` are disposable local state.
 
 By contributing, you agree that your contribution is licensed under this repository's MIT license.

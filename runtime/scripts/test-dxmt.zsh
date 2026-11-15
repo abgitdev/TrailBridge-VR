@@ -7,6 +7,18 @@ runtime_dir=${script_dir:h}
 repo_dir=${runtime_dir:h}
 build_dir=${BUILD_DIR:-${runtime_dir}/build}
 toolchain_file=${runtime_dir}/cmake/toolchains/mingw-x86_64.cmake
+fork_only=false
+if [[ ${1:-} == --fork-only && $# == 1 ]]; then
+    fork_only=true
+elif (( $# != 0 )); then
+    print -u2 "Usage: ${0:t} [--fork-only]"
+    exit 2
+fi
+fork_install=${build_dir}/dxmt/fork-install
+if [[ ${fork_only} == true && (! -f ${fork_install}/x86_64-windows/d3d11.dll || ! -f ${fork_install}/x86_64-unix/winemetal.so) ]]; then
+    print -u2 "FAIL: --fork-only requires a built DXMT fork"
+    exit 1
+fi
 
 readonly wine_version=11.10
 readonly wine_archive_name=wine-devel-11.10-osx64.tar.xz
@@ -28,8 +40,14 @@ dxmt_root=${dxmt_extract_dir}/${dxmt_version}
 
 # Intentionally ignore ambient Wine/OpenXR settings. This prefix is disposable and
 # never points at Whisky, CrossOver, or a game bottle unless explicitly overridden.
-wine_prefix=${BASALT_DXMT_WINEPREFIX:-${build_dir}/dxmt/prefix-wine-${wine_version}-dxmt-${dxmt_version}}
+# Under scripts/trailbridge-dev.zsh it lives in .local/wine-tests; wine-sandbox.zsh
+# keeps its Windows user folders out of the home folder.
+source "${script_dir}/wine-sandbox.zsh"
+wine_sandbox_default_prefix dxmt-wine-${wine_version}-dxmt-${dxmt_version} \
+    "${build_dir}/dxmt/prefix-wine-${wine_version}-dxmt-${dxmt_version}"
+wine_prefix=${${BASALT_DXMT_WINEPREFIX:-${REPLY}}:a}
 unset WINEPREFIX WINEDLLPATH WINEDLLOVERRIDES XR_RUNTIME_JSON
+wine_sandbox_prepare "${wine_prefix}" BASALT_DXMT_WINEPREFIX
 
 cmake_bin=${CMAKE:-$(command -v cmake || true)}
 curl_bin=$(command -v curl || true)
@@ -210,6 +228,15 @@ run_control_gate() {
 }
 
 pushd "${probe_dir}" >/dev/null
+manifest=${build_dir}/bin/basalt_openxr.json
+manifest_windows="Z:${manifest//\//\\}"
+WINEPREFIX=${wine_prefix} WINEDEBUG=-all \
+    "${wine_root}/bin/wine" reg.exe add \
+    'HKLM\Software\Khronos\OpenXR\1' \
+    /v ActiveRuntime /t REG_SZ /d "${manifest_windows}" /f
+wine_sandbox_verify "${wine_prefix}" BASALT_DXMT_WINEPREFIX
+
+if [[ ${fork_only} == false ]]; then
 WINEPREFIX=${wine_prefix} \
 WINEARCH=win64 \
 WINEDEBUG=-all \
@@ -234,19 +261,15 @@ WINEDEBUG=-all \
 MVK_CONFIG_LOG_LEVEL=0 \
     "${wine_root}/bin/wine" ./dxmt_iosurface_probe.exe
 
-manifest=${build_dir}/bin/basalt_openxr.json
-manifest_windows="Z:${manifest//\//\\}"
-WINEPREFIX=${wine_prefix} WINEDEBUG=-all \
-    "${wine_root}/bin/wine" reg.exe add \
-    'HKLM\Software\Khronos\OpenXR\1' \
-    /v ActiveRuntime /t REG_SZ /d "${manifest_windows}" /f
 WINEPREFIX=${wine_prefix} \
 WINEDEBUG=-all \
 MVK_CONFIG_LOG_LEVEL=0 \
     "${wine_root}/bin/wine" ./d3d11_runtime_smoke.exe
+else
+    print "NOTE: stock execution explicitly skipped (--fork-only)"
+fi
 
 # --- Basalt DXMT fork phase (runs when build-dxmt-fork.zsh has produced it) --
-fork_install=${build_dir}/dxmt/fork-install
 if [[ -f ${fork_install}/x86_64-windows/d3d11.dll && -f ${fork_install}/x86_64-unix/winemetal.so ]]; then
     overlay_dxmt() {
         local source_windows=$1
@@ -341,6 +364,13 @@ if [[ -f ${fork_install}/x86_64-windows/d3d11.dll && -f ${fork_install}/x86_64-u
         "${probe_dir}/basalt_control_test_daemon" \
         --expect-frames 21 --verify-clears --frame-delay-ms 25 \
         --view-width 1152 --view-height 1216
+    # Above the 1680x1760 the runtime once capped at: Quest 3's own panel size.
+    run_control_gate "control-socket 2064x2208" \
+        BASALT_EXPECT_HEAD_POSE=1 \
+        BASALT_EXPECT_VIEW_WIDTH=2064 BASALT_EXPECT_VIEW_HEIGHT=2208 -- \
+        "${probe_dir}/basalt_control_test_daemon" \
+        --expect-frames 21 --verify-clears --frame-delay-ms 25 \
+        --view-width 2064 --view-height 2208
 
     # The production streamer's RuntimeLink, not just the C test daemon, must
     # complete the same handshake, swapchain registration, ordered
@@ -357,4 +387,8 @@ else
 fi
 popd >/dev/null
 
-print "PASS: Wine ${wine_version} + DXMT ${dxmt_version} sharing, fence frame completion, and OpenXR D3D11 swapchains"
+if [[ ${fork_only} == true ]]; then
+    print "PASS: Wine ${wine_version} + Basalt DXMT fork suite (stock not rerun)"
+else
+    print "PASS: Wine ${wine_version} + DXMT ${dxmt_version} sharing, fence frame completion, and OpenXR D3D11 swapchains"
+fi

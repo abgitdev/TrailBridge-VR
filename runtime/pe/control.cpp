@@ -5,6 +5,7 @@
 
 #include "control.hpp"
 #include "runtime.hpp"
+#include "frame_trace.hpp"
 
 #include <d3d11_4.h>
 
@@ -16,6 +17,7 @@
 
 #include "basalt_control_protocol.h"
 #include "pose_math.hpp"
+#include "control_file.hpp"
 
 namespace {
 
@@ -625,11 +627,28 @@ bool parseControllerMask(const uint8_t* payload, size_t payloadLength) {
     return true;
 }
 
+void traceTrackingStateLocked() {
+    basalt::TraceRecord r; r.kind = basalt::TraceKind::Tracking;
+    r.time = monotonicTime() / 1000;
+    const bool connected = gControlSession != XR_NULL_HANDLE && gSocket != INVALID_SOCKET && !gReceiverFailed;
+    r.head = connected && gHeadPoseValid && gHeadPoseArrival > 0;
+    r.left = connected && gControllerInputs[0].poseValid && gControllerInputs[0].poseArrival > 0;
+    r.right = connected && gControllerInputs[1].poseValid && gControllerInputs[1].poseArrival > 0;
+    r.trackingExpires[0] = (gHeadPoseArrival + kHeadPoseFreshness) / 1000 + 1;
+    for (size_t i = 0; i < 2; ++i)
+        r.trackingExpires[i + 1] = (gControllerInputs[i].poseArrival + kControllerPoseFreshness) / 1000 + 1;
+    basalt::frameTracePush(r);
+}
+
 void markReceiverFailedLocked() {
     gReceiverFailed = true;
     gHeadPoseValid = false;
     gAckFailed = true;
     gWaiterStop = true;
+    if (basalt::frameTraceEnabled()) {
+        basalt::frameTraceEvent("receiver_failed");
+        traceTrackingStateLocked();
+    }
     if (gWaiterWake != nullptr) {
         SetEvent(gWaiterWake);
     }
@@ -682,6 +701,11 @@ DWORD WINAPI receiverThreadProc(LPVOID) {
             if (frameNumber > gLastConsumedFrameNumber &&
                 frameNumber < gNextFrameNumber) {
                 gLastConsumedFrameNumber = frameNumber;
+                if (basalt::frameTraceEnabled()) {
+                    basalt::TraceRecord r; r.kind = basalt::TraceKind::Consumed;
+                    r.control = frameNumber; r.time = basalt::frameTraceNow();
+                    basalt::frameTracePush(r);
+                }
                 WakeAllConditionVariable(&gFrameDeliveryCondition);
                 accepted = true;
             }
@@ -698,6 +722,11 @@ DWORD WINAPI receiverThreadProc(LPVOID) {
             ReleaseSRWLockExclusive(&gControlLock);
             shutdown(socket, SD_BOTH);
             return 0;
+        }
+        if (basalt::frameTraceEnabled()) {
+            if (type == BASALT_MSG_HEAD_POSE || type == BASALT_MSG_CONTROLLER_MOTION ||
+                type == BASALT_MSG_INPUT_RESET || type == BASALT_MSG_CONTROLLER_MASK)
+                traceTrackingStateLocked();
         }
         ReleaseSRWLockExclusive(&gControlLock);
         if (recenter.ready) {
@@ -772,6 +801,8 @@ struct DisconnectState {
 };
 
 DisconnectState beginDisconnectLocked() {
+    const bool tracing = basalt::frameTraceEnabled();
+    if (tracing) basalt::frameTraceEvent("control_disconnected");
     DisconnectState state;
     gWaiterStop = true;
     if (gWaiterWake != nullptr) {
@@ -798,6 +829,7 @@ DisconnectState beginDisconnectLocked() {
     gAckFailed = true;
     gAckPayloadLength = 0;
     resetTrackingStateLocked();
+    if (tracing) traceTrackingStateLocked();
     gPendingHead = 0;
     gPendingCount = 0;
     WakeAllConditionVariable(&gAckCondition);
@@ -897,12 +929,28 @@ DWORD WINAPI waiterThreadProc(LPVOID) {
             continue;
         }
 
+        const bool tracing = basalt::frameTraceEnabled();
+        int64_t fenceEnter = 0;
+        if (tracing) fenceEnter = basalt::frameTraceNow();
         if (fence == nullptr || fenceEvent == nullptr ||
             FAILED(fence->SetEventOnCompletion(frame.frameNumber, fenceEvent)) ||
             WaitForSingleObject(fenceEvent, kFenceWaitMilliseconds) != WAIT_OBJECT_0) {
+            if (tracing) {
+                basalt::TraceRecord r; r.kind = basalt::TraceKind::Gpu;
+                r.control = frame.frameNumber; r.time = basalt::frameTraceNow();
+                r.gpu = r.time - fenceEnter; basalt::frameTracePush(r);
+                r.kind = basalt::TraceKind::Event;
+                std::strcpy(r.text, "gpu_fence_wait_failed"); basalt::frameTracePush(r);
+            }
             // The frame-done contract broke; stop sending rather than lie.
             disconnectFromWaiter();
             return 0;
+        }
+
+        if (tracing) {
+            basalt::TraceRecord r; r.kind = basalt::TraceKind::Gpu;
+            r.control = frame.frameNumber; r.time = basalt::frameTraceNow();
+            r.gpu = r.time - fenceEnter; basalt::frameTracePush(r);
         }
 
         // Send outside gControlLock so a slow socket cannot stall tracking
@@ -922,13 +970,14 @@ DWORD WINAPI waiterThreadProc(LPVOID) {
     }
 }
 
-// Reads "<port> <token> [<per-eye width> <per-eye height>]" from the
+// Reads "<port> <token> [<per-eye width> <per-eye height> [<millihertz>]]" from the
 // BASALT_CONTROL file.
 bool readControlFile(
     uint16_t* port,
     char token[BASALT_CONTROL_TOKEN_LENGTH + 1],
     uint32_t* viewWidth,
-    uint32_t* viewHeight) {
+    uint32_t* viewHeight,
+    XrDuration* displayPeriod = nullptr) {
     char path[MAX_PATH]{};
     const DWORD pathLength =
         GetEnvironmentVariableA("BASALT_CONTROL", path, sizeof(path));
@@ -942,35 +991,35 @@ bool readControlFile(
     if (file == INVALID_HANDLE_VALUE) {
         return false;
     }
-    char contents[128]{};
+    char contents[256]{};
     DWORD bytesRead = 0;
     const BOOL readOk = ReadFile(file, contents, sizeof(contents) - 1, &bytesRead, nullptr);
     CloseHandle(file);
-    if (!readOk || bytesRead == 0) {
+    if (!readOk || bytesRead == 0 || bytesRead == sizeof(contents) - 1) {
         return false;
     }
     contents[bytesRead] = '\0';
 
-    char tokenBuffer[64]{};
-    unsigned int parsedPort = 0;
-    unsigned int parsedWidth = 0;
-    unsigned int parsedHeight = 0;
-    char extra = '\0';
-    const int parsed = std::sscanf(
-        contents, "%u %63s %u %u %c", &parsedPort, tokenBuffer,
-        &parsedWidth, &parsedHeight, &extra);
-    if ((parsed != 2 && parsed != 4) ||
-        parsedPort == 0 || parsedPort > 65535 ||
-        std::strlen(tokenBuffer) != BASALT_CONTROL_TOKEN_LENGTH) {
+    basalt::ControlFileSettings settings;
+    if (!basalt::parseControlFile(contents, &settings)) {
         return false;
     }
-    *port = static_cast<uint16_t>(parsedPort);
-    std::memcpy(token, tokenBuffer, BASALT_CONTROL_TOKEN_LENGTH + 1);
+    if (settings.invalidRefreshRate) {
+        static LONG loggedInvalidRate = 0;
+        if (InterlockedCompareExchange(&loggedInvalidRate, 1, 0) == 0) {
+            std::fprintf(stderr, "Basalt OpenXR: invalid control-file refresh rate; using 72 Hz\n");
+        }
+    }
+    *port = settings.port;
+    std::memcpy(token, settings.token, sizeof(settings.token));
     if (viewWidth != nullptr) {
-        *viewWidth = parsed == 4 ? parsedWidth : 0;
+        *viewWidth = settings.width;
     }
     if (viewHeight != nullptr) {
-        *viewHeight = parsed == 4 ? parsedHeight : 0;
+        *viewHeight = settings.height;
+    }
+    if (displayPeriod != nullptr) {
+        *displayPeriod = settings.displayPeriod;
     }
     return true;
 }
@@ -1064,6 +1113,14 @@ void adapterDescription(ID3D11Device* device, char* buffer, size_t capacity) {
 }  // namespace
 
 namespace basalt {
+
+XrDuration controlConfiguredDisplayPeriod() {
+    uint16_t port = 0;
+    char token[BASALT_CONTROL_TOKEN_LENGTH + 1]{};
+    XrDuration period = kDefaultDisplayPeriod;
+    readControlFile(&port, token, nullptr, nullptr, &period);
+    return period;
+}
 
 bool controlConfiguredViewSize(uint32_t* width, uint32_t* height) {
     if (width == nullptr || height == nullptr) {
@@ -1272,6 +1329,10 @@ bool controlWaitForFrameBudget(XrSession session) {
                         !timedOut;
     DisconnectState state;
     if (timedOut && gControlSession == session) {
+        if (frameTraceEnabled()) {
+            TraceRecord r; r.time = frameTraceNow(); r.control = lastQueuedFrame;
+            std::strcpy(r.text, "consume_wait_timeout"); frameTracePush(r);
+        }
         state = beginDisconnectLocked();
     }
     ReleaseSRWLockExclusive(&gControlLock);
@@ -1281,18 +1342,33 @@ bool controlWaitForFrameBudget(XrSession session) {
     return active;
 }
 
+void controlTraceTrackingLocked(XrSession session, XrTime displayTime, bool headTracked, XrTime now);
+
 bool controlHeadPose(
     XrSession session,
     XrTime locateTime,
     uint64_t* questTimestampNanoseconds,
-    XrPosef* poseInLocal) {
-    const XrTime now = monotonicTime();
+    XrPosef* poseInLocal,
+    bool traceLocate,
+    ControlLocalDefinition* localDefinition) {
     AcquireSRWLockShared(&gControlLock);
+    // Read the clock under the lock. A pose stored while this thread waited
+    // for the lock would otherwise look newer than now and count as lost.
+    const XrTime now = monotonicTime();
     const bool fresh = session != XR_NULL_HANDLE && gControlSession == session &&
                        gSocket != INVALID_SOCKET && !gReceiverFailed &&
                        gHeadPoseValid && gHeadPoseArrival > 0 &&
                        now >= gHeadPoseArrival &&
                        now - gHeadPoseArrival <= kHeadPoseFreshness;
+    if (localDefinition != nullptr) {
+        // The LOCAL definition outlives a head-tracking gap, an InputReset and
+        // a receiver failure; a disconnect resets it and clears
+        // gControlSession.
+        localDefinition->valid = session != XR_NULL_HANDLE &&
+                                 gControlSession == session && gLocalOriginValid;
+        localDefinition->localFromQuest = localDefinition->valid
+            ? localTransformForTimeLocked(locateTime) : basalt::identityPose();
+    }
     if (fresh) {
         if (questTimestampNanoseconds != nullptr) {
             *questTimestampNanoseconds = gHeadPoseQuestTimestamp;
@@ -1302,8 +1378,26 @@ bool controlHeadPose(
                 localTransformForTimeLocked(locateTime), gRawHeadPose);
         }
     }
+    if (traceLocate) controlTraceTrackingLocked(session, locateTime, fresh, now);
     ReleaseSRWLockShared(&gControlLock);
     return fresh;
+}
+
+void controlTraceTrackingLocked(XrSession session, XrTime displayTime, bool headTracked, XrTime now) {
+    TraceRecord r; r.kind = TraceKind::Locate; r.time = now / 1000;
+    r.display = displayTime / 1000; r.head = headTracked;
+    const bool connected = session != XR_NULL_HANDLE && gControlSession == session &&
+        gSocket != INVALID_SOCKET && !gReceiverFailed;
+    if (gHeadPoseArrival > 0 && now >= gHeadPoseArrival)
+        r.headAge = (now - gHeadPoseArrival) / 1000;
+    for (size_t i = 0; i < 2; ++i) {
+        const auto& c = gControllerInputs[i];
+        const int64_t age = c.poseArrival > 0 && now >= c.poseArrival ? (now - c.poseArrival) / 1000 : -1;
+        const bool active = connected && c.poseValid && age >= 0 && now - c.poseArrival <= kControllerPoseFreshness;
+        if (i == 0) { r.left = active; r.leftAge = age; }
+        else { r.right = active; r.rightAge = age; }
+    }
+    frameTraceTracking(r);
 }
 
 bool controlInputSnapshot(
@@ -1314,8 +1408,8 @@ bool controlInputSnapshot(
         return false;
     }
     *snapshot = {};
-    const XrTime now = monotonicTime();
     AcquireSRWLockShared(&gControlLock);
+    const XrTime now = monotonicTime();  // Under the lock; see controlHeadPose.
     const bool connected = session != XR_NULL_HANDLE && gControlSession == session &&
                            gSocket != INVALID_SOCKET && !gReceiverFailed;
     if (connected) {
@@ -1505,7 +1599,8 @@ void controlFrameReady(
     int64_t displayTime,
     uint64_t questTrackingTimestampNanoseconds,
     const ControlFrameView* views,
-    uint32_t viewCount) {
+    uint32_t viewCount,
+    uint64_t traceFrame) {
     if (viewCount == 0 || viewCount > kMaxFrameViews) {
         return;
     }
@@ -1518,6 +1613,16 @@ void controlFrameReady(
     }
 
     ControlFrameView preparedViews[kMaxFrameViews]{};
+    if (frameTraceEnabled()) {
+        TraceRecord r; r.kind = TraceKind::Submit;
+        r.frame = traceFrame; r.control = gNextFrameNumber; r.time = frameTraceNow();
+        for (uint32_t i = 0; i < viewCount; ++i) {
+            const auto& v = views[i];
+            r.eyes[i] = {v.swapchainId, v.imageIndex, v.imageArrayIndex,
+                v.rect.extent.width, v.rect.extent.height};
+        }
+        frameTracePush(r);
+    }
     for (uint32_t index = 0; index < viewCount; ++index) {
         preparedViews[index] = views[index];
         if (!prepareSwapchainViewForExport(

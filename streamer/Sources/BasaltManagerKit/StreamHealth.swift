@@ -34,8 +34,15 @@ public enum StreamHealthAdvisor {
         settings: StreamLaunchSettings,
         thermalState: ProcessInfo.ThermalState = .nominal,
         lowPowerMode: Bool = false,
+        headsetDisconnected: Bool = false,
         now: Date = Date()
     ) -> [StreamHealthIssue] {
+        if headsetDisconnected {
+            return [StreamHealthIssue(
+                kind: .headsetSilent,
+                title: L10n.string(.healthDisconnectedTitle),
+                detail: L10n.string(.healthDisconnectedDetail))]
+        }
         var issues = [StreamHealthIssue]()
         let fpsReports = samples.filter { $0.fps != nil }
 
@@ -43,47 +50,44 @@ public enum StreamHealthAdvisor {
            now.timeIntervalSince(last.date) > silenceThreshold {
             issues.append(StreamHealthIssue(
                 kind: .headsetSilent,
-                title: "The headset stopped reporting frames",
-                detail: "No Quest frame report for \(Int(now.timeIntervalSince(last.date))) s. "
-                    + "Check that the Quest is awake and ALVR is in the foreground"
+                title: L10n.string(.healthSilentTitle),
+                detail: L10n.string(.healthSilentDetail, Int64(now.timeIntervalSince(last.date)))
                     + (settings.connection == .wired
-                        ? ", and that the USB cable is still connected."
-                        : ", and that it is still on the same Wi-Fi network.")))
+                        ? L10n.string(.healthSilentUSB)
+                        : L10n.string(.healthSilentWiFi))))
         } else if let observed = median(of: fpsReports.suffix(window).compactMap(\.fps)),
                   settings.fps > 0,
                   observed < Double(settings.fps) * StreamMetricSummary.lowFrameRateFraction {
             issues.append(StreamHealthIssue(
                 kind: .lowFrameRate,
-                title: "Below the target frame rate",
-                detail: String(format: "The Quest reports %.0f fps against a %d fps target. ",
-                               observed, settings.fps)
+                title: L10n.string(.healthLowFramesTitle),
+                detail: L10n.string(.healthLowFramesDetail, observed, Int64(settings.fps))
                     + frameRateSuggestion(for: settings)))
         }
 
         let latencies = samples.compactMap(\.latencyMilliseconds).suffix(window)
         if let observed = median(of: Array(latencies)),
            observed > latencyBudget(for: settings.latency) {
+            let sent = median(of: Array(samples.compactMap(\.sentFPS).suffix(window)))
             issues.append(StreamHealthIssue(
                 kind: .highLatency,
-                title: "High input-to-display latency",
-                detail: String(format: "Latency is about %.0f ms. ", observed)
-                    + latencySuggestion(for: settings)))
+                title: L10n.string(.healthLatencyTitle),
+                detail: L10n.string(.healthLatencyDetail, observed)
+                    + latencySuggestion(for: settings, sentFPS: sent)))
         }
 
         if thermalState == .serious || thermalState == .critical {
             issues.append(StreamHealthIssue(
                 kind: .thermalPressure,
-                title: "Your Mac is running hot",
-                detail: "macOS may be throttling the GPU and encoder. Improve airflow, "
-                    + "close other demanding apps, or use a lower resolution."))
+                title: L10n.string(.healthThermalTitle),
+                detail: L10n.string(.healthThermalDetail)))
         }
 
         if lowPowerMode {
             issues.append(StreamHealthIssue(
                 kind: .lowPowerMode,
-                title: "Low Power Mode is on",
-                detail: "It limits GPU and encoder performance. Turn it off in "
-                    + "System Settings › Battery while playing."))
+                title: L10n.string(.healthLowPowerTitle),
+                detail: L10n.string(.healthLowPowerDetail)))
         }
         return issues
     }
@@ -99,31 +103,44 @@ public enum StreamHealthAdvisor {
         }
     }
 
-    private static func frameRateSuggestion(for settings: StreamLaunchSettings) -> String {
+    /// Frames per second a game may fall short of the target before latency
+    /// is blamed on the game rather than the link. A game that holds the
+    /// target still varies by about half a frame per two-second report.
+    static let gameFrameTolerance = 1.0
+
+    private static func frameRateSuggestion(
+        for settings: StreamLaunchSettings, suggestingBitrate: Bool = true
+    ) -> String {
         if settings.resolution == .quality {
-            return "Try the Balanced resolution for this game next session."
+            return L10n.string(.healthTryBalanced)
         }
         if settings.fps > 72 {
-            return "Try 72 fps for this game next session."
+            return L10n.string(.healthTry72)
         }
-        if settings.connection == .wifi, settings.megabits > 60 {
-            return "Try a lower bitrate or a USB cable."
+        if suggestingBitrate, settings.connection == .wifi, settings.megabits > 60 {
+            return L10n.string(.healthTryBitrateOrUSB)
         }
         if settings.resolution == .balanced {
-            return "Try the Performance resolution for this game next session."
+            return L10n.string(.healthTryPerformance)
         }
-        return "Close other demanding apps and keep the Mac on power."
+        return L10n.string(.healthCloseApps)
     }
 
-    private static func latencySuggestion(for settings: StreamLaunchSettings) -> String {
-        if settings.connection == .wifi {
-            return "Wi-Fi adds latency; a USB cable or an uncongested 5 or 6 GHz network helps."
+    /// Input-to-display latency includes the game's own frame time. When the
+    /// Mac itself sends fewer frames than the target, the game is behind and
+    /// a lighter setting helps; only otherwise is the delay after the Mac.
+    private static func latencySuggestion(
+        for settings: StreamLaunchSettings, sentFPS: Double?
+    ) -> String {
+        guard settings.connection == .wifi else {
+            return L10n.string(.healthTryBitrateOrResolution)
         }
-        switch settings.latency {
-        case .balanced: return "Try the Low latency preset."
-        case .low: return "Try the Ultra Low latency preset."
-        case .ultra: return "Try a lower bitrate or resolution."
+        if let sentFPS, settings.fps > 0,
+           sentFPS < Double(settings.fps) - gameFrameTolerance {
+            return L10n.string(.healthGameLatency, sentFPS, Int64(settings.fps))
+                + frameRateSuggestion(for: settings, suggestingBitrate: false)
         }
+        return L10n.string(.healthWiFiLatency)
     }
 
     static func median(of values: [Double]) -> Double? {

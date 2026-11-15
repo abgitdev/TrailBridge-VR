@@ -33,6 +33,9 @@ bool controlActive(XrSession session);
 // advertise the stream's actual target size to the application.
 bool controlConfiguredViewSize(uint32_t* width, uint32_t* height);
 
+// Snapshotted at session creation; missing/invalid rate retains 72 Hz.
+XrDuration controlConfiguredDisplayPeriod();
+
 // Blocks frame production while two submitted frames are still unconsumed by
 // the daemon (an app that calls xrWaitFrame(N+1) before xrEndFrame(N) can
 // have one more in flight). This is the end-to-end backpressure boundary: it
@@ -43,16 +46,27 @@ bool controlWaitForFrameBudget(XrSession session);
 // takes effect only after every frame the application may be rendering.
 void controlNotePredictedDisplayTime(XrSession session, XrTime predictedDisplayTime);
 
+// The LOCAL definition (LOCAL-from-Quest) that a locate uses. valid is false
+// while the session has no control connection or no LOCAL origin yet.
+struct ControlLocalDefinition {
+    bool valid;
+    XrPosef localFromQuest;
+};
+
 // Returns the latest fresh ALVR head pose (LOCAL-from-HEAD), selecting the
 // previous LOCAL definition for locateTime values before a pending recenter's
 // changeTime. The Quest timestamp is preserved only for ordering because it is
 // not in the runtime's XrTime clock domain. False means disconnected, missing,
 // or stale tracking. A zero locateTime selects the current definition.
+// localDefinition, when given, receives the definition selected for
+// locateTime under the same lock, also while the head pose itself is stale.
 bool controlHeadPose(
     XrSession session,
     XrTime locateTime,
     uint64_t* questTimestampNanoseconds,
-    XrPosef* poseInLocal);
+    XrPosef* poseInLocal,
+    bool traceLocate = false,
+    ControlLocalDefinition* localDefinition = nullptr);
 
 enum class ControlHand : uint32_t {
     kLeft = 0,
@@ -155,6 +169,7 @@ void controlFrameReady(
     int64_t displayTime,
     uint64_t questTrackingTimestampNanoseconds,
     const ControlFrameView* views,
-    uint32_t viewCount);
+    uint32_t viewCount,
+    uint64_t traceFrame = 0);
 
 }  // namespace basalt

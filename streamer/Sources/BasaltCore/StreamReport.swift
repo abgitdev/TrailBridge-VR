@@ -12,6 +12,9 @@ public enum StreamReport {
         public var videoMegabits: Double?
         /// Average Quest input-to-display latency.
         public var latencyMilliseconds: Double?
+        /// Video frames per second handed to the stream socket: the rate the
+        /// game delivered on the Mac, before the network.
+        public var sentFPS: Double?
     }
 
     private static let questMarker = "  Quest "
@@ -63,13 +66,21 @@ public enum StreamReport {
         pcmMegabits: Double,
         wireMegabits: Double,
         maximumWriteMilliseconds: Double,
-        drops: Int
+        drops: Int,
+        peakDecibels: Double? = nil
     ) -> String {
         "  \(transport) audio send: "
             + String(format: "%.1f blocks/s, %.3f Mbps PCM, %.3f Mbps wire, ",
                      blocksPerSecond, pcmMegabits, wireMegabits)
             + String(format: "%.1f ms max write, %d drop(s)",
                      maximumWriteMilliseconds, drops)
+            + (peakDecibels.map(audioPeakText) ?? "")
+    }
+
+    /// Exact digital silence is named, not printed as -inf: it is what a
+    /// missing System Audio Recording permission looks like.
+    static func audioPeakText(_ decibels: Double) -> String {
+        decibels.isFinite ? String(format: ", peak %.1f dBFS", decibels) : ", peak silence"
     }
 
     /// The dashboard values in a Quest or video-send line; nil for any other
@@ -85,7 +96,11 @@ public enum StreamReport {
                     in: rest[latency.upperBound...], before: " ms average")
             }
         } else if let video = line.range(of: videoMarker) {
-            values.videoMegabits = number(in: line[video.upperBound...], before: " Mbps on wire")
+            let rest = line[video.upperBound...]
+            values.videoMegabits = number(in: rest, before: " Mbps on wire")
+            if values.videoMegabits != nil {
+                values.sentFPS = number(in: rest, before: " fps, ")
+            }
         }
         return values == Values() ? nil : values
     }

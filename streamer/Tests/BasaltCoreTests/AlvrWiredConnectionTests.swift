@@ -22,6 +22,21 @@ final class AlvrWiredConnectionTests: XCTestCase {
             adb)
     }
 
+    func testADBEnvironmentNamesTheChosenDataFolder() {
+        let chosen = URL(fileURLWithPath: "/Volumes/Games/TrailBridge", isDirectory: true)
+        let environment = AlvrADBEnvironment.values(dataRoot: chosen, base: [
+            "BASALT_DATA_DIR": "/project/.local/data",
+            "PATH": "/usr/bin",
+        ])
+        XCTAssertEqual(environment["BASALT_DATA_DIR"], "/Volumes/Games/TrailBridge")
+        XCTAssertEqual(environment["ANDROID_USER_HOME"], "/Volumes/Games/TrailBridge/Tools/Android")
+        XCTAssertEqual(environment["ANDROID_ADB_LOG_PATH"], "/Volumes/Games/TrailBridge/Tools/adb.log")
+        XCTAssertEqual(environment["PATH"], "/usr/bin")
+        // Without a value from the app's start, the chosen folder is still set.
+        XCTAssertEqual(AlvrADBEnvironment.values(dataRoot: chosen, base: [:])["BASALT_DATA_DIR"],
+                       "/Volumes/Games/TrailBridge")
+    }
+
     func testFindsAuthorizedPhysicalUSBDevice() {
         let output = """
         List of devices attached

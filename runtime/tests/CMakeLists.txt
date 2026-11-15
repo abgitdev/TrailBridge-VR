@@ -60,6 +60,13 @@ add_executable(frame_timer_probe frame_timer_probe.cpp)
 target_compile_options(frame_timer_probe PRIVATE -Wall -Wextra -Wpedantic)
 target_link_options(frame_timer_probe PRIVATE -static -static-libgcc -static-libstdc++)
 
+add_executable(frame_trace_smoke frame_trace_smoke.cpp ../pe/frame.cpp ../pe/frame_trace.cpp)
+target_include_directories(frame_trace_smoke PRIVATE ../pe)
+target_link_libraries(frame_trace_smoke PRIVATE OpenXR::headers)
+target_compile_definitions(frame_trace_smoke PRIVATE XR_USE_GRAPHICS_API_D3D11)
+target_compile_options(frame_trace_smoke PRIVATE -Wall -Wextra -Wpedantic)
+target_link_options(frame_trace_smoke PRIVATE -static -static-libgcc -static-libstdc++)
+
 # Optional external-application gate. This is Khronos' real hello_xr program,
 # not a Basalt-shaped smoke test. Keep it opt-in because it adds a second
 # pinned source download and is primarily run with a connected headset.

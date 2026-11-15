@@ -1,5 +1,6 @@
 import CoreVideo
 import Foundation
+import IOSurface
 import Metal
 
 /// Composes the OpenXR runtime's two per-eye images into ALVR's side-by-side
@@ -28,6 +29,14 @@ public final class RuntimeStereoComposer: @unchecked Sendable {
         let pixelBuffer: CVPixelBuffer
         /// Keeps `texture` valid; the texture cache does not retain it.
         let cvTexture: CVMetalTexture
+        let texture: MTLTexture
+    }
+
+    /// Retains the backing storage and, for BGRA, the CoreVideo texture view.
+    private struct Source {
+        let surface: IOSurfaceRef?
+        let pixelBuffer: CVPixelBuffer?
+        let cvTexture: CVMetalTexture?
         let texture: MTLTexture
     }
 
@@ -160,6 +169,39 @@ public final class RuntimeStereoComposer: @unchecked Sendable {
         return (cvTexture, texture)
     }
 
+    private func source(for buffer: CVPixelBuffer) -> Source? {
+        guard CVPixelBufferGetPixelFormatType(buffer) == kCVPixelFormatType_32BGRA,
+              let (cvTexture, texture) = Self.metalTexture(for: buffer, in: textureCache)
+        else { return nil }
+        return Source(surface: nil, pixelBuffer: buffer, cvTexture: cvTexture, texture: texture)
+    }
+
+    private func source(for surface: IOSurfaceRef) -> Source? {
+        switch IOSurfaceGetPixelFormat(surface) {
+        case kCVPixelFormatType_32BGRA:
+            var maybeBuffer: Unmanaged<CVPixelBuffer>?
+            guard CVPixelBufferCreateWithIOSurface(
+                nil, surface, nil, &maybeBuffer) == kCVReturnSuccess,
+                  let buffer = maybeBuffer?.takeRetainedValue() else { return nil }
+            return source(for: buffer)
+        case kCVPixelFormatType_32RGBA:
+            // CoreVideo cannot wrap DXMT's RGBA layout. Metal can read the
+            // IOSurface directly; use UNORM for raw passthrough, including
+            // sRGB swapchains, just as the BGRA cache path does.
+            let descriptor = MTLTextureDescriptor.texture2DDescriptor(
+                pixelFormat: .rgba8Unorm,
+                width: IOSurfaceGetWidth(surface), height: IOSurfaceGetHeight(surface),
+                mipmapped: false)
+            descriptor.usage = .shaderRead
+            descriptor.storageMode = .shared
+            guard let texture = commandQueue.device.makeTexture(
+                descriptor: descriptor, iosurface: surface, plane: 0) else { return nil }
+            return Source(surface: surface, pixelBuffer: nil, cvTexture: nil, texture: texture)
+        default:
+            return nil
+        }
+    }
+
     /// Scales each eye to fill its half without blocking the runtime-link
     /// receive queue. At most two output surfaces can be in composition or
     /// downstream encoding at once; callers drop a new frame when this method
@@ -177,17 +219,40 @@ public final class RuntimeStereoComposer: @unchecked Sendable {
         rightRect: SIMD4<Float> = SIMD4<Float>(0, 0, 0, 0),
         completion: @escaping @Sendable (ComposedFrame?) -> Void
     ) -> Bool {
+        composeAsync(
+            left: source(for: left), right: source(for: right),
+            leftRect: leftRect, rightRect: rightRect, completion: completion)
+    }
+
+    /// Accepts runtime surfaces without requiring CoreVideo to wrap RGBA.
+    @discardableResult
+    public func composeAsync(
+        left: IOSurfaceRef,
+        right: IOSurfaceRef,
+        leftRect: SIMD4<Float> = SIMD4<Float>(0, 0, 0, 0),
+        rightRect: SIMD4<Float> = SIMD4<Float>(0, 0, 0, 0),
+        completion: @escaping @Sendable (ComposedFrame?) -> Void
+    ) -> Bool {
+        composeAsync(
+            left: source(for: left), right: source(for: right),
+            leftRect: leftRect, rightRect: rightRect, completion: completion)
+    }
+
+    private func composeAsync(
+        left: Source?, right: Source?,
+        leftRect: SIMD4<Float>, rightRect: SIMD4<Float>,
+        completion: @escaping @Sendable (ComposedFrame?) -> Void
+    ) -> Bool {
         guard let output = reserveOutput() else { return false }
-        guard let leftTexture = Self.metalTexture(for: left, in: textureCache),
-              let rightTexture = Self.metalTexture(for: right, in: textureCache),
+        guard let left, let right,
               let commandBuffer = commandQueue.makeCommandBuffer(),
               let encoder = commandBuffer.makeComputeCommandEncoder() else {
             recycle(output)
             return false
         }
         encoder.setComputePipelineState(pipeline)
-        encoder.setTexture(leftTexture.1, index: 0)
-        encoder.setTexture(rightTexture.1, index: 1)
+        encoder.setTexture(left.texture, index: 0)
+        encoder.setTexture(right.texture, index: 1)
         encoder.setTexture(output.texture, index: 2)
         var leftRectValue = leftRect
         var rightRectValue = rightRect
@@ -205,9 +270,10 @@ public final class RuntimeStereoComposer: @unchecked Sendable {
         encoder.endEncoding()
         // CVMetalTextureCacheCreateTextureFromImage requires callers to keep
         // each CVMetalTexture alive until the GPU finishes with it; the system
-        // does not retain it. Hold the source wrappers and buffers until then;
-        // the reserved output stays alive through `output`.
-        let gpuResources = (left, right, leftTexture.0, rightTexture.0)
+        // does not retain it. Hold both Sources until then, including the
+        // RGBA MTLTextures and their IOSurfaces or the BGRA wrappers/buffers.
+        // The reserved output stays alive through `output`.
+        let gpuResources = (left, right)
         commandBuffer.addCompletedHandler { [weak self] buffer in
             withExtendedLifetime(gpuResources) {}
             guard let self else {

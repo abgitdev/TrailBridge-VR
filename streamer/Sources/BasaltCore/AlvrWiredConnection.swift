@@ -45,12 +45,16 @@ public enum AlvrADBExecutableLocator {
     public static func find(
         environment: [String: String] = ProcessInfo.processInfo.environment,
         fallbackDirectories: [String] = standardFallbackDirectories,
+        dataRoot: URL? = nil,
         fileManager: FileManager = .default
     ) -> URL? {
         let pathDirectories = (environment["PATH"] ?? "")
             .split(separator: ":").map(String.init)
         var visited = Set<String>()
-        for directory in pathDirectories + fallbackDirectories
+        let managed = (dataRoot ?? environment["BASALT_DATA_DIR"].map { URL(fileURLWithPath: $0) })
+            .map { $0.appendingPathComponent("Tools/platform-tools").path }
+        // PATH comes first so scripts/tools/adb keeps its developer isolation.
+        for directory in pathDirectories + [managed].compactMap({ $0 }) + fallbackDirectories
             where visited.insert(directory).inserted {
             let candidate = URL(fileURLWithPath: directory, isDirectory: true)
                 .appendingPathComponent("adb")
@@ -60,6 +64,38 @@ public enum AlvrADBExecutableLocator {
         }
         return nil
     }
+}
+
+public enum AlvrADBEnvironment {
+    public static func values(dataRoot: URL, base: [String: String]) -> [String: String] {
+        var environment = base
+        // The chosen data folder, not the one the app was started with:
+        // scripts/tools/adb finds the downloaded Platform Tools through it.
+        environment["BASALT_DATA_DIR"] = dataRoot.path
+        environment["ANDROID_USER_HOME"] = dataRoot.appendingPathComponent("Tools/Android").path
+        environment["ANDROID_ADB_LOG_PATH"] = dataRoot.appendingPathComponent("Tools/adb.log").path
+        environment["ADB_MDNS_AUTO_CONNECT"] = "0"
+        // Use the same managed server for setup and streaming, separate from
+        // other tools. scripts/tools/adb overrides this with its developer policy.
+        environment["ADB_SERVER_SOCKET"] = "tcp:localhost:5039"
+        return environment
+    }
+}
+
+/// The wired setup failures the management app explains to the user. It finds
+/// them by these texts in the streamer's output, so keep the wording here and
+/// let `AlvrWiredFailureTests` pin it.
+public enum AlvrWiredFailure {
+    public static let adbMissing =
+        "Could not find adb; open Headset in TrailBridge and choose Get Android Platform Tools."
+    public static let debuggingUnauthorized =
+        "Quest USB debugging is unauthorized; accept the USB debugging prompt in the headset"
+    public static let noAuthorizedQuest =
+        "No authorized USB Quest found by adb; connect a data-capable cable and enable Developer Mode"
+    public static let clientMissing =
+        "No ALVR client package is installed on the USB headset"
+    public static let pausedBehindLockScreen =
+        "ALVR is paused behind the Quest lock screen. Put on and unlock the headset, keep the ALVR client open, then try Play VR again."
 }
 
 /// Owns ALVR's native USB setup for one authorized Android headset. `adb forward`
@@ -80,14 +116,14 @@ public final class AlvrWiredConnection: @unchecked Sendable {
         let devices = try runADB(["devices", "-l"])
         guard let serial = AlvrADBDeviceParser.authorizedUSBSerial(from: devices) else {
             if AlvrADBDeviceParser.hasUnauthorizedDevice(in: devices) {
-                throw BasaltError("Quest USB debugging is unauthorized; accept the USB debugging prompt in the headset")
+                throw BasaltError(AlvrWiredFailure.debuggingUnauthorized)
             }
-            throw BasaltError("No authorized USB Quest found by adb; connect a data-capable cable and enable Developer Mode")
+            throw BasaltError(AlvrWiredFailure.noAuthorizedQuest)
         }
 
         let packages = try runADB(["-s", serial, "shell", "pm", "list", "packages"])
         guard let package = AlvrADBDeviceParser.installedALVRPackage(from: packages) else {
-            throw BasaltError("No ALVR client package is installed on USB headset \(serial)")
+            throw BasaltError(AlvrWiredFailure.clientMissing)
         }
 
         let ports = [AlvrDiscoveryListener.alvrPort, AlvrVideoStreamSender.defaultPort]
@@ -119,8 +155,7 @@ public final class AlvrWiredConnection: @unchecked Sendable {
                 Thread.sleep(forTimeInterval: 0.25)
             }
             guard resumed else {
-                throw BasaltError(
-                    "ALVR is paused behind the Quest lock screen. Put on and unlock the headset, keep the ALVR client open, then try Play VR again.")
+                throw BasaltError(AlvrWiredFailure.pausedBehindLockScreen)
             }
         } catch {
             // `setup()` has not returned an owner yet, so roll back any port
@@ -131,6 +166,17 @@ public final class AlvrWiredConnection: @unchecked Sendable {
             throw error
         }
         return AlvrWiredConnection(serial: serial, packageName: package)
+    }
+
+    /// A USB cable reconnect can discard adb's forwards. Recreate just those
+    /// mappings; waking or relaunching ALVR belongs to initial setup only.
+    public func restoreForwards() throws {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !stopped else { throw CancellationError() }
+        for port in [AlvrDiscoveryListener.alvrPort, AlvrVideoStreamSender.defaultPort] {
+            _ = try Self.runADB(["-s", serial, "forward", "tcp:\(port)", "tcp:\(port)"])
+        }
     }
 
     public func stop() {
@@ -148,32 +194,48 @@ public final class AlvrWiredConnection: @unchecked Sendable {
 
     deinit { stop() }
 
+    /// adb repeats the device serial in its own error text. The session log
+    /// is copied into reports, so keep the serial out of it.
+    static func redactingSerial(in text: String, arguments: [String]) -> String {
+        guard let index = arguments.firstIndex(of: "-s"), arguments.indices.contains(index + 1),
+              !arguments[index + 1].isEmpty else { return text }
+        return text.replacingOccurrences(of: arguments[index + 1], with: "[serial]")
+    }
+
+    /// Tells the management app, which reads this output, that the adb
+    /// server now running was started for this session.
+    private static func announceServerStart(in output: String) {
+        if AlvrADBServerOwnership.announcesServerStart(output) {
+            print(AlvrADBServerOwnership.startedLine)
+        }
+    }
+
     @discardableResult
     private static func runADB(_ arguments: [String]) throws -> String {
         guard let adb = AlvrADBExecutableLocator.find() else {
-            throw BasaltError(
-                "Could not find adb; install Android platform-tools "
-                    + "(for example: brew install android-platform-tools)")
+            throw BasaltError(AlvrWiredFailure.adbMissing)
         }
         let process = Process()
         process.executableURL = adb
         process.arguments = arguments
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = pipe
+        if let path = ProcessInfo.processInfo.environment["BASALT_DATA_DIR"] {
+            let root = URL(fileURLWithPath: path)
+            let directory = root.appendingPathComponent("Tools/Android")
+            guard directory.resolvingSymlinksInPath().path.hasPrefix(root.resolvingSymlinksInPath().path + "/") else {
+                throw BasaltError("Android tools folder resolves outside the data folder")
+            }
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            process.environment = AlvrADBEnvironment.values(dataRoot: root, base: ProcessInfo.processInfo.environment)
+        }
         do {
-            try process.run()
+            let output = try AlvrADBProcess.run(process)
+            announceServerStart(in: output)
+            return output
         } catch {
-            throw BasaltError(
-                "Could not run adb at \(adb.path): \(error.localizedDescription)")
+            announceServerStart(in: error.localizedDescription)
+            let operation = arguments.first == "-s" ? arguments.dropFirst(2).first : arguments.first
+            throw BasaltError("adb \(operation ?? "command"): "
+                + redactingSerial(in: error.localizedDescription, arguments: arguments))
         }
-        let output = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-        process.waitUntilExit()
-        guard process.terminationStatus == 0 else {
-            let detail = output.trimmingCharacters(in: .whitespacesAndNewlines)
-            throw BasaltError("adb \(arguments.joined(separator: " ")) failed"
-                + (detail.isEmpty ? "" : ": \(detail)"))
-        }
-        return output
     }
 }

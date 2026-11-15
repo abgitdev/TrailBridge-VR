@@ -49,10 +49,16 @@ public enum AlvrBeaconParser {
 /// 255.255.255.255) don't reliably reach `NWListener` flows, and this also
 /// keeps the listener trivially testable via unicast on an ephemeral port.
 ///
-/// Receive-and-log only for now — the server side of discovery never sends
-/// anything back; responding (session negotiation) is the next M2 step.
+/// Receive only: the server side of discovery never sends anything back.
+/// The session is negotiated over a separate TCP control connection.
 public final class AlvrDiscoveryListener {
     public static let alvrPort: UInt16 = 9943  // CONTROL_PORT in ALVR
+
+    /// A headset sends one beacon a second. This many are read at once, then
+    /// `1 s / beaconRefillNanoseconds` per second (20 000); see the handler.
+    static let beaconBurst = 2_000
+    static let beaconRefillNanoseconds: UInt64 = 50_000
+    static let floodPause = DispatchTimeInterval.milliseconds(50)
 
     /// The port actually bound (differs from init's when passing 0).
     public let boundPort: UInt16
@@ -65,6 +71,8 @@ public final class AlvrDiscoveryListener {
     /// because the subsequent TCP control connection can fail transiently.
     public init(port: UInt16 = AlvrDiscoveryListener.alvrPort,
                 repeatInterval: TimeInterval = 5,
+                trustFile: URL? = nil,
+                onRequest: @escaping (String) -> Void = { print($0) },
                 onClient: @escaping (AlvrBeacon, String) -> Void) throws {
         let fd = socket(AF_INET, SOCK_DGRAM, 0)
         guard fd >= 0 else {
@@ -84,9 +92,9 @@ public final class AlvrDiscoveryListener {
             }
         }
         guard bindResult == 0 else {
+            let code = errno
             close(fd)
-            throw BasaltError("Cannot bind UDP port \(port) for discovery "
-                + "(is ALVR or MoltenVR already running?)")
+            throw BasaltError.cannotBind("UDP port \(port) for discovery", code: code)
         }
 
         var boundAddress = sockaddr_in()
@@ -98,29 +106,47 @@ public final class AlvrDiscoveryListener {
         }
         boundPort = UInt16(bigEndian: boundAddress.sin_port)
 
-        source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: queue)
-        var lastReported: [String: Date] = [:]
-        source.setEventHandler {
+        let readSource = DispatchSource.makeReadSource(fileDescriptor: fd, queue: queue)
+        source = readSource
+        let discoveryQueue = queue
+        var recentClients = RecentBeaconClients()
+        var readAllowance = RefillingAllowance(
+            burst: Self.beaconBurst, intervalNanoseconds: Self.beaconRefillNanoseconds)
+        let trust = HeadsetBeaconGate(file: trustFile)
+        readSource.setEventHandler {
             var buffer = [UInt8](repeating: 0, count: 1024)
-            var sender = sockaddr_in()
-            var senderLength = socklen_t(MemoryLayout<sockaddr_in>.size)
-            let count = withUnsafeMutablePointer(to: &sender) {
-                $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                    recvfrom(fd, &buffer, buffer.count, 0, $0, &senderLength)
+            // Everything that has arrived, as long as the allowance lasts.
+            while true {
+                guard readAllowance.take(at: DispatchTime.now().uptimeNanoseconds) else {
+                    // Far more beacons than headsets send. Reading them all
+                    // would keep a core busy for as long as someone floods
+                    // the port, so stop for a moment: the system drops what
+                    // its buffer cannot hold. The source is kept alive by
+                    // the block that resumes it.
+                    readSource.suspend()
+                    discoveryQueue.asyncAfter(deadline: .now() + Self.floodPause) { readSource.resume() }
+                    return
                 }
+                var sender = sockaddr_in()
+                var senderLength = socklen_t(MemoryLayout<sockaddr_in>.size)
+                let count = withUnsafeMutablePointer(to: &sender) {
+                    $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                        recvfrom(fd, &buffer, buffer.count, MSG_DONTWAIT, $0, &senderLength)
+                    }
+                }
+                guard count >= 0 else { return } // nothing left to read
+                guard count > 0,
+                      let beacon = AlvrBeaconParser.parse(Data(buffer[0..<count])) else { continue }
+
+                var ipBuffer = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
+                inet_ntop(AF_INET, &sender.sin_addr, &ipBuffer, socklen_t(INET_ADDRSTRLEN))
+                let ip = String(cString: ipBuffer)
+
+                guard trust.accept(hostname: beacon.hostname, ip: ip, report: onRequest),
+                      recentClients.shouldOffer("\(beacon.hostname)@\(ip)", at: Date(),
+                                                repeatInterval: repeatInterval) else { continue }
+                onClient(beacon, ip)
             }
-            guard count > 0,
-                  let beacon = AlvrBeaconParser.parse(Data(buffer[0..<count])) else { return }
-
-            var ipBuffer = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
-            inet_ntop(AF_INET, &sender.sin_addr, &ipBuffer, socklen_t(INET_ADDRSTRLEN))
-            let ip = String(cString: ipBuffer)
-
-            let key = "\(beacon.hostname)@\(ip)"
-            let now = Date()
-            if let last = lastReported[key], now.timeIntervalSince(last) < repeatInterval { return }
-            lastReported[key] = now
-            onClient(beacon, ip)
         }
         source.setCancelHandler { close(fd) }
         source.resume()

@@ -86,7 +86,7 @@ public enum GameAudioDeviceDiscovery {
         return AudioObjectGetPropertyDataSize(id, &address, 0, nil, &size) == noErr && size > 0
     }
 
-    private static func deviceName(_ id: AudioDeviceID) -> String? {
+    static func deviceName(_ id: AudioDeviceID) -> String? {
         var address = AudioObjectPropertyAddress(
             mSelector: kAudioObjectPropertyName,
             mScope: kAudioObjectPropertyScopeGlobal,
@@ -110,6 +110,66 @@ public enum GameAudioDeviceDiscovery {
         }
         return value
     }
+
+    public static func setNominalSampleRate(_ sampleRate: Double, for device: GameAudioDevice) throws {
+        if nominalSampleRate(device.id) == sampleRate { return }
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyNominalSampleRate,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        var settable: DarwinBoolean = false
+        var status = AudioObjectIsPropertySettable(device.id, &address, &settable)
+        guard status == noErr, settable.boolValue else {
+            throw BasaltError(
+                "Could not set '\(device.name)' to \(Int(sampleRate)) Hz "
+                    + "(sample rate is not writable, status \(status)). Check Audio MIDI Setup.")
+        }
+        var value = Float64(sampleRate)
+        status = AudioObjectSetPropertyData(
+            device.id, &address, 0, nil, UInt32(MemoryLayout<Float64>.size), &value)
+        guard status == noErr else {
+            throw BasaltError(
+                "Could not set '\(device.name)' to \(Int(sampleRate)) Hz "
+                    + "(CoreAudio status \(status)). Check Audio MIDI Setup.")
+        }
+        // CoreAudio applies device changes asynchronously. Confirm the actual
+        // nominal rate before routing output or opening AVFoundation capture.
+        let deadline = ProcessInfo.processInfo.systemUptime + 2
+        repeat {
+            if nominalSampleRate(device.id) == sampleRate { return }
+            Thread.sleep(forTimeInterval: 0.02)
+        } while ProcessInfo.processInfo.systemUptime < deadline
+        throw BasaltError(
+            "'\(device.name)' did not switch to \(Int(sampleRate)) Hz within 2 seconds. "
+                + "Check Audio MIDI Setup before starting game audio.")
+    }
+}
+
+struct AudioOutputCandidate: Equatable {
+    let id: AudioDeviceID
+    let name: String
+    let isBuiltIn: Bool
+}
+
+/// The candidates are output-capable devices, in CoreAudio enumeration order.
+func audioOutputToRestore(previousID: AudioDeviceID, routedID: AudioDeviceID,
+                          systemOutputID: AudioDeviceID?,
+                          candidates: [AudioOutputCandidate]) -> AudioDeviceID? {
+    if previousID != routedID { return previousID }
+    if let systemOutputID, systemOutputID != routedID,
+       candidates.contains(where: { $0.id == systemOutputID }) {
+        return systemOutputID
+    }
+    let real = candidates.filter {
+        $0.id != routedID && $0.name.range(of: "BlackHole", options: .caseInsensitive) == nil
+    }
+    return (real.first(where: \.isBuiltIn) ?? real.first)?.id
+}
+
+public enum AudioOutputRestoreResult {
+    case restored(String)
+    case noRealOutputFound
+    case unchanged
 }
 
 /// Temporarily points the system's default application-audio output at the
@@ -130,44 +190,51 @@ public final class GameAudioOutputRoute: @unchecked Sendable {
         }
         self.device = device
         previousDeviceID = try Self.defaultOutputDeviceID()
+        try GameAudioDeviceDiscovery.setNominalSampleRate(GameAudioCapture.sampleRate, for: device)
         if previousDeviceID != device.id {
             try Self.setDefaultOutputDeviceID(device.id)
         }
     }
 
-    public func restore() throws {
+    @discardableResult
+    public func restore() throws -> AudioOutputRestoreResult {
         stateLock.lock()
-        guard !restored else {
-            stateLock.unlock()
-            return
+        defer { stateLock.unlock() }
+        guard !restored else { return .unchanged }
+        let currentDeviceID = try Self.defaultOutputDeviceID()
+        guard currentDeviceID == device.id else {
+            restored = true
+            return .unchanged
         }
-        let shouldRestore: Bool
-        do {
-            let currentDeviceID = try Self.defaultOutputDeviceID()
-            shouldRestore = previousDeviceID != device.id && currentDeviceID == device.id
-        } catch {
-            stateLock.unlock()
-            throw error
+
+        var candidates: [AudioOutputCandidate] = []
+        var systemOutputID: AudioDeviceID?
+        if previousDeviceID == device.id {
+            candidates = try Self.outputCandidates()
+            systemOutputID = try? Self.deviceID(for: kAudioHardwarePropertyDefaultSystemOutputDevice)
         }
-        if shouldRestore {
-            do {
-                try Self.setDefaultOutputDeviceID(previousDeviceID)
-            } catch {
-                stateLock.unlock()
-                throw error
-            }
+        guard let target = audioOutputToRestore(
+            previousID: previousDeviceID, routedID: device.id,
+            systemOutputID: systemOutputID, candidates: candidates) else {
+            restored = true
+            return .noRealOutputFound
         }
+        try Self.setDefaultOutputDeviceID(target)
         restored = true
-        stateLock.unlock()
+        return .restored(GameAudioDeviceDiscovery.deviceName(target) ?? "CoreAudio device \(target)")
     }
 
     deinit {
-        try? restore()
+        _ = try? restore()
     }
 
     private static func defaultOutputDeviceID() throws -> AudioDeviceID {
+        try deviceID(for: kAudioHardwarePropertyDefaultOutputDevice)
+    }
+
+    private static func deviceID(for selector: AudioObjectPropertySelector) throws -> AudioDeviceID {
         var address = AudioObjectPropertyAddress(
-            mSelector: kAudioHardwarePropertyDefaultOutputDevice,
+            mSelector: selector,
             mScope: kAudioObjectPropertyScopeGlobal,
             mElement: kAudioObjectPropertyElementMain)
         var deviceID = kAudioObjectUnknown
@@ -178,6 +245,39 @@ public final class GameAudioOutputRoute: @unchecked Sendable {
             throw BasaltError("Could not read the current CoreAudio output device (status \(status))")
         }
         return deviceID
+    }
+
+    private static func outputCandidates() throws -> [AudioOutputCandidate] {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDevices,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        var size: UInt32 = 0
+        var status = AudioObjectGetPropertyDataSize(
+            AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size)
+        guard status == noErr else {
+            throw BasaltError("Could not enumerate CoreAudio output devices (status \(status))")
+        }
+        var ids = [AudioDeviceID](repeating: 0, count: Int(size) / MemoryLayout<AudioDeviceID>.size)
+        status = AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &ids)
+        guard status == noErr else {
+            throw BasaltError("Could not read CoreAudio output devices (status \(status))")
+        }
+        return ids.compactMap { id in
+            guard GameAudioDeviceDiscovery.hasOutputStreams(id),
+                  let name = GameAudioDeviceDiscovery.deviceName(id) else { return nil }
+            var transportAddress = AudioObjectPropertyAddress(
+                mSelector: kAudioDevicePropertyTransportType,
+                mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain)
+            var transport: UInt32 = 0
+            var transportSize = UInt32(MemoryLayout<UInt32>.size)
+            let transportStatus = AudioObjectGetPropertyData(
+                id, &transportAddress, 0, nil, &transportSize, &transport)
+            return AudioOutputCandidate(id: id, name: name,
+                isBuiltIn: transportStatus == noErr && transport == kAudioDeviceTransportTypeBuiltIn)
+        }
     }
 
     private static func setDefaultOutputDeviceID(_ id: AudioDeviceID) throws {

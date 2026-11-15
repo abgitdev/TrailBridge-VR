@@ -26,18 +26,37 @@ public struct SetupCheck: Identifiable, Equatable, Sendable {
         self.required = required
         self.action = action
     }
+
+    /// The engine is missing and the app can download it itself.
+    public var offersWineDownload: Bool {
+        id == "wine" && status != .ready && action == SetupInspector.downloadWineAction
+    }
+
+    /// The person can finish this step on the Setup page, with no source
+    /// checkout and nothing to build.
+    public var isFixedOnSetupPage: Bool {
+        offersWineDownload || (id == "rosetta" && status == .actionNeeded)
+    }
 }
 
 public struct SetupInspector: @unchecked Sendable {
+    /// The "wine" check's action while no pinned Wine is there at all.
+    public static let downloadWineAction = "Download Wine"
+    /// The "rosetta" check's action.
+    public static let copyRosettaCommandAction = "Copy Command"
+
     public let repoRoot: URL
     public let manager: BottleManager
     private let fileManager: FileManager
+    private let rosettaInstalled: @Sendable () -> Bool
 
     public init(repoRoot: URL, manager: BottleManager,
-                fileManager: FileManager = .default) {
+                fileManager: FileManager = .default,
+                rosettaInstalled: @escaping @Sendable () -> Bool = { Rosetta.isInstalled() }) {
         self.repoRoot = repoRoot
         self.manager = manager
         self.fileManager = fileManager
+        self.rosettaInstalled = rosettaInstalled
     }
 
     public func inspect() -> [SetupCheck] {
@@ -46,10 +65,17 @@ public struct SetupInspector: @unchecked Sendable {
         let arm = ProcessInfo.processInfo.machineHardwareName == "arm64"
         let engines = manager.engines()
         let pinnedEngine = engines.contains { $0.kind == .pinned && $0.supportsBasaltDXMT }
+        // With no pinned Wine at all the app downloads it; a Wine that is
+        // there without the DXMT fork needs the fork built.
+        let hasPinnedWine = engines.contains { $0.kind == .pinned }
+        let rosetta = rosettaInstalled()
         let runtime = repoRoot.appendingPathComponent("runtime/build/bin/basalt_openxr.dll")
         let dxmt = repoRoot.appendingPathComponent(
             "runtime/build/dxmt/fork-install/x86_64-unix/winemetal.so")
-        let adb = Self.findExecutable(named: "adb", fileManager: fileManager)
+        // Ready only with an adb that can run: the developer wrapper alone
+        // is always found, even with nothing behind it.
+        let adb = HeadsetTools.runnableADB(repoRoot: repoRoot, dataRoot: manager.paths.root,
+                                           fileManager: fileManager)
         let audioNames = (try? GameAudioDeviceDiscovery.inputDevices().map(\.name)) ?? []
         let hasBlackHole = audioNames.contains {
             $0.localizedCaseInsensitiveContains("BlackHole")
@@ -62,6 +88,13 @@ public struct SetupInspector: @unchecked Sendable {
                     ? "Apple Silicon and macOS 14 or newer"
                     : "BasaltVR requires Apple Silicon and macOS 14 or newer",
                 status: arm && supportedOS ? .ready : .unavailable, required: true),
+            // Wine and Windows games are Intel code. Nothing to install on
+            // a Mac that cannot run the app at all.
+            SetupCheck(
+                id: "rosetta", title: "Rosetta 2",
+                detail: rosetta ? "Rosetta 2 is installed" : Rosetta.installCommand,
+                status: rosetta ? .ready : arm ? .actionNeeded : .unavailable,
+                required: true, action: arm ? Self.copyRosettaCommandAction : nil),
             SetupCheck(
                 id: "screen", title: "Screen Recording",
                 detail: CGPreflightScreenCaptureAccess()
@@ -73,12 +106,15 @@ public struct SetupInspector: @unchecked Sendable {
                 id: "adb", title: "Android Platform Tools",
                 detail: adb?.path ?? "Optional for wireless; required only for USB cable streaming",
                 status: adb == nil ? .actionNeeded : .ready,
-                required: false, action: "Install with Homebrew"),
+                required: false, action: "Get Android Platform Tools…"),
             SetupCheck(
                 id: "wine", title: "Pinned Wine + DXMT engine",
-                detail: pinnedEngine ? "Verified engine is available" : "Build the pinned M5 engine and Basalt DXMT fork",
+                detail: pinnedEngine ? "Verified engine is available"
+                    : hasPinnedWine ? "Build the pinned M5 engine and Basalt DXMT fork"
+                    : "Wine \(PinnedWine.download.version) has not been downloaded",
                 status: pinnedEngine ? .ready : .actionNeeded,
-                required: true, action: "Open Build Instructions"),
+                required: true,
+                action: hasPinnedWine ? "Open Build Instructions" : Self.downloadWineAction),
             SetupCheck(
                 id: "runtime", title: "OpenXR runtime",
                 detail: fileManager.fileExists(atPath: runtime.path)
@@ -91,13 +127,15 @@ public struct SetupInspector: @unchecked Sendable {
                     ? dxmt.path : "The IOSurface-enabled DXMT fork has not been built",
                 status: fileManager.fileExists(atPath: dxmt.path) ? .ready : .actionNeeded,
                 required: true, action: "Open Build Instructions"),
+            // The Mac's own audio needs nothing installed; BlackHole is the
+            // other choice and the only one before macOS 14.2.
             SetupCheck(
-                id: "audio", title: "BlackHole game audio",
+                id: "audio", title: "Game audio",
                 detail: hasBlackHole
                     ? "\(audioNames.first { $0.localizedCaseInsensitiveContains("BlackHole") } ?? "BlackHole") is available"
-                    : "Optional 48 kHz loopback device for headset audio",
-                status: hasBlackHole ? .ready : .actionNeeded,
-                required: false, action: "Install with Homebrew"),
+                    : GameAudioSource.macAudioSupported ? "The Mac's own audio" : "Not installed",
+                status: hasBlackHole || GameAudioSource.macAudioSupported ? .ready : .actionNeeded,
+                required: false, action: "Get BlackHole…"),
         ]
     }
 
@@ -423,7 +461,9 @@ public struct GameDetector: @unchecked Sendable {
 
     public func detect(bottles: [ManagedBottle], profiles: [LaunchProfile]) -> [DetectedGame] {
         var games = [String: DetectedGame]()
-        let bottlesByName = Dictionary(uniqueKeysWithValues: bottles.map { ($0.name, $0) })
+        // `listBottles` gives unique names; a repeated one must still not trap.
+        let bottlesByName = Dictionary(bottles.map { ($0.name, $0) },
+                                       uniquingKeysWith: { first, _ in first })
 
         for profile in profiles {
             guard let bottle = bottlesByName[profile.bottleName] else { continue }
@@ -506,6 +546,13 @@ public struct GameDetector: @unchecked Sendable {
     }
 
     private static func gameTitle(profile: LaunchProfile) -> String {
+        // The title typed when the game was added names it. Profiles saved
+        // without one, Steam game profiles among them, keep the name the
+        // rules below have always given them.
+        if let title = profile.title?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !title.isEmpty {
+            return title
+        }
         let normalizedName = profile.name.lowercased()
             .replacingOccurrences(of: "_", with: "-")
         if normalizedName.contains("beat-saber")
@@ -527,7 +574,7 @@ public enum BottleOrigin: String, Codable, CaseIterable, Sendable {
 
     public var label: String {
         switch self {
-        case .managed: return "Basalt"
+        case .managed: return "TrailBridge"
         case .whisky: return "Whisky"
         case .crossover: return "CrossOver"
         }
@@ -648,7 +695,7 @@ public struct SteamGame: Identifiable, Equatable, Sendable {
     }
 
     public var isKnownVRGame: Bool {
-        ["250820", "620980", "739630"].contains(appID)
+        ["250820", "620980", "739630", "2669380", "1032430"].contains(appID)
     }
 
     public var isTool: Bool {
@@ -784,6 +831,14 @@ public enum ResolutionSelection: String, Codable, CaseIterable, Sendable {
     case performance
     case balanced
     case quality
+    case high = "1536x1600"
+    case maximum = "1680x1760"
+    /// Quest 3's own panel size per eye.
+    case questNative = "2064x2208"
+    /// About 1.25 and 1.5 times the panel's width and height: sharper after
+    /// the lens correction, for Macs and games that can render and encode it.
+    case questNative125 = "2560x2736"
+    case questNative150 = "3072x3280"
 
     /// The per-eye size `basalt-streamer --resolution <rawValue>` uses.
     public var perEyeResolution: PerEyeResolution {
@@ -791,6 +846,11 @@ public enum ResolutionSelection: String, Codable, CaseIterable, Sendable {
         case .performance: return .performance
         case .balanced: return .balanced
         case .quality: return .quality
+        case .high: return try! PerEyeResolution(width: 1536, height: 1600)
+        case .maximum: return try! PerEyeResolution(width: 1680, height: 1760)
+        case .questNative: return try! PerEyeResolution(width: 2064, height: 2208)
+        case .questNative125: return try! PerEyeResolution(width: 2560, height: 2736)
+        case .questNative150: return try! PerEyeResolution(width: 3072, height: 3280)
         }
     }
 
@@ -801,7 +861,41 @@ public enum ResolutionSelection: String, Codable, CaseIterable, Sendable {
 
     /// "Quality · 1344 × 1408"
     public var label: String {
-        "\(rawValue.prefix(1).uppercased())\(rawValue.dropFirst()) · \(dimensions)"
+        let title: String
+        switch self {
+        case .high: title = "High"
+        case .maximum: title = "Maximum"
+        case .questNative: title = "Quest 3 native"
+        case .questNative125: title = "Quest 3 native ×1.25"
+        case .questNative150: title = "Quest 3 native ×1.5"
+        default: title = "\(rawValue.prefix(1).uppercased())\(rawValue.dropFirst())"
+        }
+        return "\(title) · \(dimensions)"
+    }
+}
+
+/// How the video encoder controls its bitrate. Low-latency rate control
+/// keeps every frame's size even but has the encoder take frames one at a
+/// time; ordinary rate control lets it work on two at once, about twice the
+/// frames per second at the same delay per frame (measured on a Mac mini M4
+/// at 1680x1760 per eye: 70 against 148 frames per second).
+public enum EncoderRateMode: String, Codable, CaseIterable, Sendable {
+    /// Low latency while the stream fits it, more frames above that.
+    case auto
+    case lowLatency
+    case moreFrames
+
+    /// Pixels per second the low-latency mode keeps up with, with headroom:
+    /// a Mac mini M4 managed about 390–450 million (side-by-side frames).
+    public static let lowLatencyPixelRate = 360_000_000
+
+    public func usesLowLatency(resolution: PerEyeResolution, fps: Int) -> Bool {
+        switch self {
+        case .lowLatency: return true
+        case .moreFrames: return false
+        case .auto:
+            return 2 * resolution.width * resolution.height * fps <= Self.lowLatencyPixelRate
+        }
     }
 }
 
@@ -812,24 +906,221 @@ public enum StreamConnectionMode: String, Codable, CaseIterable, Sendable {
     public var label: String { self == .wired ? "USB cable" : "Wireless (Wi-Fi)" }
 }
 
+public enum HeadsetFilterLevel: String, Codable, CaseIterable, Sendable {
+    case off, normal, quality
+
+    public var label: String { rawValue.capitalized }
+}
+
+/// Where game audio comes from.
+public enum GameAudioSource: String, Codable, CaseIterable, Sendable {
+    /// What the Mac plays, captured without a driver (macOS 14.2 and newer).
+    case mac
+    /// A loopback input such as BlackHole.
+    case device
+    case off
+
+    public static var macAudioSupported: Bool {
+        ProcessInfo.processInfo.isOperatingSystemAtLeast(
+            OperatingSystemVersion(majorVersion: 14, minorVersion: 2, patchVersion: 0))
+    }
+}
+
+/// One game audio choice as a picker shows it.
+public enum GameAudioChoice: Hashable, Sendable {
+    case mac
+    case device(String)
+    case off
+
+    /// "Mac audio", the device name, or nil for Off.
+    public var label: String? {
+        switch self {
+        case .mac: return L10n.string(.settingsMacAudio)
+        case .device(let name): return name
+        case .off: return nil
+        }
+    }
+}
+
+public enum BlackHoleSetup {
+    /// The vendor's page no longer links the installer directly; this is the
+    /// signed, notarized package that Homebrew's blackhole-2ch cask also uses.
+    public static let downloadURL = URL(string: "https://existential.audio/downloads/BlackHole2ch-0.7.1.pkg")!
+    public static let installationHelp = "BlackHole is a free GPL-3.0 virtual audio driver by Existential Audio, installed separately. The button downloads its official installer: open it, then restart the Mac."
+    public static let routingHelp = "During a VR session the Mac's sound goes to the headset; it switches back when the session ends."
+}
+
 public struct StreamLaunchSettings: Codable, Equatable, Sendable {
+    public var codec = VideoCodec.h264 {
+        didSet {
+            qualityPreset = .custom
+            // H.264 allows more than HEVC; switching keeps the stream decodable.
+            if megabits > codec.maximumMegabits { megabits = codec.maximumMegabits }
+        }
+    }
     public var connection = StreamConnectionMode.wired
-    public var fps = 72
-    public var megabits = 30
-    public var resolution = ResolutionSelection.quality
-    public var latency = StreamLatencyPreset.low
+    public var fps = 72 { didSet { qualityPreset = .custom } }
+    public var megabits = 30 { didSet { qualityPreset = .custom } }
+    public var resolution = ResolutionSelection.quality { didSet { qualityPreset = .custom } }
+    public var latency = StreamLatencyPreset.low { didSet { qualityPreset = .custom } }
+    /// Where game audio comes from: the Mac's own output by default.
+    public var gameAudio = GameAudioSource.mac
+    /// The loopback input (BlackHole) used when `gameAudio` is `.device`.
     public var audioDeviceName: String?
+    public var questSupersampling = HeadsetFilterLevel.off { didSet { qualityPreset = .custom } }
+    public var questSharpening = HeadsetFilterLevel.off { didSet { qualityPreset = .custom } }
+    /// Ask macOS to schedule the game as a latency-critical foreground
+    /// process. Not a stream quality value, so it leaves the preset alone.
+    public var gamePriorityHigh = false
+    /// Not a picture quality value either, so it leaves the preset alone.
+    public var encoderMode = EncoderRateMode.auto
+    public private(set) var qualityPreset = StreamQualityPreset.custom
 
     public init() {}
+
+    private enum CodingKeys: String, CodingKey {
+        case codec, connection, fps, megabits, resolution, latency, audioDeviceName
+        case questSupersampling, questSharpening, qualityPreset, audioChoiceMade
+        case gamePriorityHigh, gameAudio, encoderMode
+    }
+
+    public init(from decoder: Decoder) throws {
+        self.init()
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        codec = try values.decodeIfPresent(VideoCodec.self, forKey: .codec) ?? .h264
+        connection = try values.decodeIfPresent(StreamConnectionMode.self, forKey: .connection) ?? connection
+        fps = try values.decodeIfPresent(Int.self, forKey: .fps) ?? fps
+        megabits = try values.decodeIfPresent(Int.self, forKey: .megabits) ?? megabits
+        resolution = try values.decodeIfPresent(ResolutionSelection.self, forKey: .resolution) ?? resolution
+        let deviceName = try values.decodeIfPresent(String.self, forKey: .audioDeviceName)
+            .flatMap { $0.isEmpty ? nil : $0 }
+        if let source = try values.decodeIfPresent(GameAudioSource.self, forKey: .gameAudio) {
+            gameAudio = source
+            audioDeviceName = source == .device ? deviceName : nil
+            if source == .device && deviceName == nil { gameAudio = .off }
+        } else {
+            // Written before the Mac's own audio existed. The previous build
+            // picked only "BlackHole 2ch" by itself (audioChoiceMade false):
+            // that becomes the new default. A device or Off the person chose
+            // stays, and a session record keeps what the session really used.
+            let chosen = try values.decodeIfPresent(Bool.self, forKey: .audioChoiceMade) ?? false
+            let recorded = decoder.userInfo[Self.recordedSessionKey] as? Bool ?? false
+            switch deviceName {
+            case let name? where !chosen && !recorded
+                && name.caseInsensitiveCompare("BlackHole 2ch") == .orderedSame:
+                gameAudio = .mac
+            case let name?:
+                gameAudio = .device
+                audioDeviceName = name
+            case nil:
+                gameAudio = chosen || recorded ? .off : .mac
+            }
+        }
+        questSupersampling = try values.decodeIfPresent(HeadsetFilterLevel.self, forKey: .questSupersampling) ?? .off
+        questSharpening = try values.decodeIfPresent(HeadsetFilterLevel.self, forKey: .questSharpening) ?? .off
+        gamePriorityHigh = try values.decodeIfPresent(Bool.self, forKey: .gamePriorityHigh) ?? false
+        encoderMode = (try? values.decodeIfPresent(EncoderRateMode.self, forKey: .encoderMode)) ?? .auto
+        let matching = StreamQualityPreset.presets.first { $0.matches(self) } ?? .custom
+        let saved = try values.decodeIfPresent(StreamQualityPreset.self, forKey: .qualityPreset)
+        qualityPreset = saved == .custom ? .custom : matching
+    }
+
+    /// Set on a decoder that reads past sessions: their audio is not moved
+    /// to the Mac's own audio.
+    public static let recordedSessionKey = CodingUserInfoKey(rawValue: "recordedSession")!
+
+    /// Writes the older keys too, so a previous build of the app reads the
+    /// same choice back: the Mac's own audio looks like "not chosen" there
+    /// and that build picks BlackHole by itself.
+    public func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(codec, forKey: .codec)
+        try values.encode(connection, forKey: .connection)
+        try values.encode(fps, forKey: .fps)
+        try values.encode(megabits, forKey: .megabits)
+        try values.encode(resolution, forKey: .resolution)
+        try values.encode(latency, forKey: .latency)
+        try values.encode(gameAudio, forKey: .gameAudio)
+        if gameAudio == .device { try values.encodeIfPresent(audioDeviceName, forKey: .audioDeviceName) }
+        try values.encode(gameAudio != .mac, forKey: .audioChoiceMade)
+        try values.encode(questSupersampling, forKey: .questSupersampling)
+        try values.encode(questSharpening, forKey: .questSharpening)
+        try values.encode(qualityPreset, forKey: .qualityPreset)
+        try values.encode(gamePriorityHigh, forKey: .gamePriorityHigh)
+        try values.encode(encoderMode, forKey: .encoderMode)
+    }
+
+    /// Whether this launch's encoder uses low-latency rate control.
+    public var usesLowLatencyRateControl: Bool {
+        encoderMode.usesLowLatency(resolution: resolution.perEyeResolution, fps: fps)
+    }
+
+    /// The game audio a launch uses, as one value for pickers and labels.
+    public var gameAudioChoice: GameAudioChoice {
+        get {
+            switch gameAudio {
+            case .mac: return .mac
+            case .off: return .off
+            case .device: return audioDeviceName.map(GameAudioChoice.device) ?? .off
+            }
+        }
+        set {
+            switch newValue {
+            case .mac: gameAudio = .mac; audioDeviceName = nil
+            case .off: gameAudio = .off; audioDeviceName = nil
+            case .device(let name): gameAudio = .device; audioDeviceName = name
+            }
+        }
+    }
+
+    public mutating func selectQuality(_ preset: StreamQualityPreset) {
+        if let resolution = preset.resolution {
+            codec = preset.codec
+            self.resolution = resolution
+            megabits = preset.megabits
+            questSupersampling = preset.antiAliasing
+            fps = 72
+            latency = .low
+            questSharpening = .off
+        }
+        qualityPreset = preset
+    }
+
+    /// The Mac's own audio needs macOS 14.2. On an older system that choice
+    /// turns into the stereo BlackHole device once it is installed; until
+    /// then it stays, and the streamer reports that it has no game audio.
+    /// Any other choice is kept.
+    public mutating func applyAudioDefault(
+        devices: [GameAudioDevice],
+        macAudioSupported: Bool = GameAudioSource.macAudioSupported
+    ) {
+        guard gameAudio == .mac, !macAudioSupported,
+              let blackHole = devices.first(where: {
+                  $0.name.caseInsensitiveCompare("BlackHole 2ch") == .orderedSame
+              }) else { return }
+        gameAudioChoice = .device(blackHole.name)
+    }
 
     public var arguments: [String] {
         var values = [
             connection == .wired ? "--wired" : "--wireless",
-            "--fps", String(fps), "--mbps", String(megabits),
-            "--resolution", resolution.rawValue, "--latency", latency.rawValue,
+            // A value saved for another codec must not stop the launch.
+            "--fps", String(fps), "--mbps", String(min(megabits, codec.maximumMegabits)),
+            "--resolution", resolution.rawValue, "--latency", "low",
+            "--low-latency-rc", usesLowLatencyRateControl ? "on" : "off",
         ]
-        if let audioDeviceName, !audioDeviceName.isEmpty {
-            values += ["--audio-device", audioDeviceName, "--route-audio"]
+        if codec == .hevc { values += ["--codec", "hevc"] }
+        if questSupersampling != .off {
+            values += ["--quest-supersampling", questSupersampling.rawValue]
+        }
+        if questSharpening != .off {
+            values += ["--quest-sharpening", questSharpening.rawValue]
+        }
+        switch gameAudioChoice {
+        case .mac: values += ["--game-audio", "mac"]
+        case .device(let name) where !name.isEmpty:
+            values += ["--audio-device", name, "--route-audio"]
+        case .device, .off: break
         }
         return values
     }
@@ -841,19 +1132,24 @@ public struct StreamMetricSample: Identifiable, Equatable, Sendable {
     public let fps: Double?
     public let megabits: Double?
     public let latencyMilliseconds: Double?
+    /// Frames per second the Mac sent, i.e. the game's own delivered rate.
+    public let sentFPS: Double?
 
     public init(date: Date = Date(), fps: Double? = nil,
-                megabits: Double? = nil, latencyMilliseconds: Double? = nil) {
+                megabits: Double? = nil, latencyMilliseconds: Double? = nil,
+                sentFPS: Double? = nil) {
         self.date = date
         self.fps = fps
         self.megabits = megabits
         self.latencyMilliseconds = latencyMilliseconds
+        self.sentFPS = sentFPS
     }
 
     public static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.date == rhs.date && lhs.fps == rhs.fps
             && lhs.megabits == rhs.megabits
             && lhs.latencyMilliseconds == rhs.latencyMilliseconds
+            && lhs.sentFPS == rhs.sentFPS
     }
 }
 
@@ -863,7 +1159,7 @@ public enum StreamLogMetricsParser {
         guard let values = StreamReport.parse(line) else { return nil }
         return StreamMetricSample(
             date: date, fps: values.questFPS, megabits: values.videoMegabits,
-            latencyMilliseconds: values.latencyMilliseconds)
+            latencyMilliseconds: values.latencyMilliseconds, sentFPS: values.sentFPS)
     }
 }
 

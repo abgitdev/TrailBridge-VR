@@ -24,6 +24,18 @@ public struct AlvrVideoCapabilities: Equatable, Sendable {
 
     /// Headset-advertised gammas outside this range fall back to linear (1).
     static let encodingGammaRange: ClosedRange<Float> = 0.1...10
+
+    static let refreshRatesShownInLog = 8
+
+    /// The refresh rates for a log line. The list is the headset's own and
+    /// may hold thousands of entries; a log line shows the first few and
+    /// says how many were left out.
+    public var refreshRatesLogText: String {
+        let shown = refreshRates.prefix(Self.refreshRatesShownInLog)
+            .map { String(format: "%.0f", $0) }.joined(separator: ", ")
+        let hidden = refreshRates.count - Self.refreshRatesShownInLog
+        return hidden > 0 ? "\(shown) and \(hidden) more" : shown
+    }
 }
 
 public struct AlvrFov: Equatable, Sendable {
@@ -133,13 +145,14 @@ public final class AlvrSessionHandshakeResult: @unchecked Sendable {
     private let controlQueue: DispatchQueue
     private let controlQueueKey = DispatchSpecificKey<Void>()
     private var readSource: DispatchSourceRead?
-    private var receiveBuffer = Data()
+    private var receiveBuffer = AlvrControlReceiveBuffer()
     private var requestIDRHandler: (() -> Void)?
     private var viewsConfigHandler: ((AlvrViewsConfig) -> Void)?
     private var buttonsHandler: (([AlvrButtonEntry]) -> Void)?
     private var interactionProfileHandler: ((_ deviceID: UInt64, _ profileID: UInt64) -> Void)?
     private var disconnectHandler: (() -> Void)?
     private var disconnected = false
+    private var socketClosed = false
     private var pendingIDRRequest = false
     private var latestViewsConfig: AlvrViewsConfig?
     private var latestButtons: [UInt64: AlvrButtonValue] = [:]
@@ -164,7 +177,7 @@ public final class AlvrSessionHandshakeResult: @unchecked Sendable {
             timer.schedule(deadline: .now() + .milliseconds(500),
                            repeating: .milliseconds(500))
             timer.setEventHandler { [weak self] in
-                guard let self else { return }
+                guard let self, !self.disconnected else { return }
                 do {
                     try AlvrControlProbe.sendKeepAlive(to: socket)
                 } catch {
@@ -184,12 +197,20 @@ public final class AlvrSessionHandshakeResult: @unchecked Sendable {
     }
 
     deinit {
-        keepaliveTimer?.cancel()
-        readSource?.cancel()
+        stop()
+    }
+
+    public func stop() {
+        let finish = {
+            self.handleDisconnect()
+            guard !self.socketClosed else { return }
+            self.socketClosed = true
+            close(self.socket)
+        }
         if DispatchQueue.getSpecific(key: controlQueueKey) != nil {
-            close(socket)
+            finish()
         } else {
-            _ = controlQueue.sync { close(socket) }
+            controlQueue.sync(execute: finish)
         }
     }
 
@@ -260,18 +281,35 @@ public final class AlvrSessionHandshakeResult: @unchecked Sendable {
     }
 
     public func sendH264DecoderConfig(_ parameterSets: Data) {
+        sendDecoderConfig(parameterSets, codec: .h264)
+    }
+
+    public func sendDecoderConfig(_ parameterSets: Data, codec: VideoCodec) {
         guard streamReady, !parameterSets.isEmpty else { return }
         controlQueue.sync { [socket] in
-            try? AlvrControlProbe.sendH264DecoderConfig(parameterSets, to: socket)
+            guard !disconnected else { return }
+            try? AlvrControlProbe.sendDecoderConfig(parameterSets, codec: codec, to: socket)
         }
     }
 
+    /// How many chunks one wake-up of the read source may take. A peer that
+    /// keeps the socket readable must not keep the control queue to itself:
+    /// the keep-alive timer and `sendDecoderConfig` run on the same queue.
+    static let maximumChunksPerWakeUp = 64
+
     private func drainControlSocket() {
-        var bytes = [UInt8](repeating: 0, count: 16_384)
-        while true {
+        guard !disconnected else { return }
+        var bytes = [UInt8](repeating: 0, count: AlvrControlReceiveBuffer.chunkBytes)
+        var chunks = 0
+        // Level-triggered: what is left unread wakes the source again.
+        while chunks < Self.maximumChunksPerWakeUp {
             let count = recv(socket, &bytes, bytes.count, 0)
             if count > 0 {
-                receiveBuffer.append(contentsOf: bytes[0..<count])
+                chunks += 1
+                receiveBuffer.append(bytes[0..<count])
+                // Parse after every chunk, so the buffer never holds more
+                // than one unfinished packet and the chunk just read.
+                guard dispatchReceivedPackets() else { return }
             } else if count == 0 {
                 handleDisconnect()
                 return
@@ -284,19 +322,26 @@ public final class AlvrSessionHandshakeResult: @unchecked Sendable {
                 return
             }
         }
+    }
 
-        while receiveBuffer.count >= 4 {
-            let length = receiveBuffer.prefix(4).reduce(0) { ($0 << 8) | Int($1) }
-            guard length > 0, length <= AlvrControlProbe.maximumPacketBytes else {
-                receiveBuffer.removeAll()
+    /// Handles every complete packet in the buffer; false once the session
+    /// has been closed because the peer broke the framing.
+    private func dispatchReceivedPackets() -> Bool {
+        defer { receiveBuffer.releaseConsumedBytes() }
+        while true {
+            let payload: Data
+            switch receiveBuffer.nextPacket() {
+            case .incomplete:
+                return true
+            case .invalid(let length):
+                fputs("ALVR control: the headset announced a packet of \(length) bytes "
+                    + "(allowed: 1 to \(AlvrControlProbe.maximumPacketBytes)); closing the session\n",
+                      stderr)
                 handleDisconnect()
-                return
+                return false
+            case .packet(let data):
+                payload = data
             }
-            guard receiveBuffer.count >= 4 + length else { return }
-            let payloadStart = receiveBuffer.index(receiveBuffer.startIndex, offsetBy: 4)
-            let payloadEnd = receiveBuffer.index(payloadStart, offsetBy: length)
-            let payload = Data(receiveBuffer[payloadStart..<payloadEnd])
-            receiveBuffer.removeFirst(4 + length)
             guard let event = try? AlvrClientControlDecoder.decode(payload) else { continue }
             switch event {
             case .requestIDR:
@@ -312,11 +357,16 @@ public final class AlvrSessionHandshakeResult: @unchecked Sendable {
                 let retained = Self.retainButtonEntries(entries, in: &latestButtons)
                 if !retained.isEmpty { buttonsHandler?(retained) }
             case .activeInteractionProfile(let deviceID, let profileID):
+                // Only the two controllers have a profile the runtime uses;
+                // any other id is the peer's own number and is not kept.
+                guard AlvrHand(alvrDeviceID: deviceID) != nil else { break }
                 latestInteractionProfiles[deviceID] = profileID
                 interactionProfileHandler?(deviceID, profileID)
             case .keepAlive, .other:
                 break
             }
+            // A handler may have stopped the session.
+            guard !disconnected else { return false }
         }
     }
 
@@ -335,17 +385,103 @@ public final class AlvrSessionHandshakeResult: @unchecked Sendable {
     }
 }
 
+extension Data {
+    /// `removeFirst` only narrows the view: the bytes taken off the front stay
+    /// in the storage, and appending extends that same storage, so a receive
+    /// buffer consumed this way grows by every byte the connection delivers.
+    /// Call this once a batch of packets is handled: what is left (usually
+    /// nothing, at most one unfinished packet) moves to storage of its own.
+    mutating func releaseRemovedPrefix() {
+        if startIndex != 0 { self = Data(self) }
+    }
+}
+
+/// Receive buffer of the live control channel: length-prefixed packets
+/// (`u32` big-endian length, then the payload). Filled one read chunk at a
+/// time and emptied of complete packets after each chunk, it holds at most
+/// one unfinished packet plus the chunk just read (`maximumBytes`). A length
+/// outside 1…`maximumPacketBytes` ends the session, so no peer can make it
+/// grow past that.
+struct AlvrControlReceiveBuffer {
+    static let chunkBytes = 16_384
+    static let maximumBytes = 4 + AlvrControlProbe.maximumPacketBytes + chunkBytes
+
+    enum Step: Equatable {
+        case packet(Data)
+        /// The next packet has not arrived in full.
+        case incomplete
+        /// The announced length is zero or above the limit.
+        case invalid(length: Int)
+    }
+
+    private var bytes = Data()
+
+    var count: Int { bytes.count }
+
+    mutating func append<Chunk: Collection>(_ chunk: Chunk) where Chunk.Element == UInt8 {
+        bytes.append(contentsOf: chunk)
+    }
+
+    mutating func nextPacket() -> Step {
+        guard bytes.count >= 4 else { return .incomplete }
+        let length = bytes.prefix(4).reduce(0) { ($0 << 8) | Int($1) }
+        guard length > 0, length <= AlvrControlProbe.maximumPacketBytes else {
+            return .invalid(length: length)
+        }
+        guard bytes.count >= 4 + length else { return .incomplete }
+        let payloadStart = bytes.index(bytes.startIndex, offsetBy: 4)
+        let payloadEnd = bytes.index(payloadStart, offsetBy: length)
+        let payload = Data(bytes[payloadStart..<payloadEnd])
+        bytes.removeFirst(4 + length)
+        return .packet(payload)
+    }
+
+    /// See `Data.releaseRemovedPrefix`.
+    mutating func releaseConsumedBytes() {
+        bytes.releaseRemovedPrefix()
+    }
+
+    mutating func removeAll() {
+        bytes = Data()
+    }
+}
+
 /// Minimal decoder for the stable prefix of ALVR v20's bincode-encoded
 /// `ClientConnectionResult`. The accepted packet has more capability fields,
 /// but they are deliberately left for session negotiation.
 public enum AlvrClientConnectionDecoder {
+    public static let maximumDisplayNameLength = 64
+
+    /// The name is the peer's own text and it is printed to the session log,
+    /// which the manager reads line by line: a line break in it would start
+    /// a line of the peer's choosing ("Headset request: …"). Line breaks,
+    /// control and invisible formatting characters become spaces, and the
+    /// name is cut to a length a log line can carry.
+    static func printableDisplayName(_ name: String) -> String {
+        printableText(name, maximumLength: maximumDisplayNameLength)
+    }
+
+    /// The same cleaning for any other text a peer supplies for the log.
+    static func printableText(_ text: String, maximumLength: Int) -> String {
+        var printable = String.UnicodeScalarView()
+        for scalar in text.unicodeScalars.prefix(maximumLength) {
+            switch scalar.properties.generalCategory {
+            case .control, .format, .lineSeparator, .paragraphSeparator:
+                printable.append(" ")
+            default:
+                printable.append(scalar)
+            }
+        }
+        return String(printable)
+    }
+
     public static func decode(_ payload: Data) throws -> AlvrClientConnectionState {
         var reader = LittleEndianReader(payload)
         let variant = try reader.readUInt32()
         switch variant {
         case 0:
             let protocolId = try reader.readUInt64()
-            let displayName = try reader.readString(maxBytes: 4_096)
+            let displayName = printableDisplayName(try reader.readString(maxBytes: 4_096))
             let serverIP = try reader.readIPAddress()
             let hasCapabilities = try reader.readByte()
             let capabilities: AlvrVideoCapabilities?
@@ -392,7 +528,9 @@ public enum AlvrControlProbe {
         requestedViewHeight: UInt32? = nil,
         preferredRefreshRate: Float = 90,
         latencyPreset: StreamLatencyPreset = .balanced,
-        wired: Bool = false
+        wired: Bool = false,
+        questSupersampling: QuestPostProcessingLevel = .off,
+        questSharpening: QuestPostProcessingLevel = .off
     ) async throws -> AlvrSessionHandshakeResult {
         try await Task.detached(priority: .utility) {
             try negotiateBlocking(host: host, port: port, timeoutSeconds: timeoutSeconds,
@@ -400,7 +538,9 @@ public enum AlvrControlProbe {
                                   requestedViewHeight: requestedViewHeight,
                                   preferredRefreshRate: preferredRefreshRate,
                                   latencyPreset: latencyPreset,
-                                  wired: wired)
+                                  wired: wired,
+                                  questSupersampling: questSupersampling,
+                                  questSharpening: questSharpening)
         }.value
     }
 
@@ -417,7 +557,9 @@ public enum AlvrControlProbe {
                                           requestedViewHeight: UInt32?,
                                           preferredRefreshRate: Float,
                                           latencyPreset: StreamLatencyPreset,
-                                          wired: Bool) throws
+                                          wired: Bool,
+                                          questSupersampling: QuestPostProcessingLevel,
+                                          questSharpening: QuestPostProcessingLevel) throws
         -> AlvrSessionHandshakeResult {
         let fd = try openSocket(host: host, port: port, timeoutSeconds: timeoutSeconds)
         do {
@@ -444,7 +586,9 @@ public enum AlvrControlProbe {
                 settings = try AlvrNegotiatedSettings.beatSaberDefaults(for: capabilities)
             }
             let streamConfig = try AlvrStreamConfigEncoder.framedPacket(
-                settings: settings, wired: wired)
+                settings: settings, wired: wired,
+                questSupersampling: questSupersampling,
+                questSharpening: questSharpening)
             do {
                 try writeExactly(streamConfig, to: fd,
                                  deadline: Date().addingTimeInterval(TimeInterval(timeoutSeconds)))
@@ -551,15 +695,20 @@ public enum AlvrControlProbe {
                          deadline: Date().addingTimeInterval(0.4))
     }
 
-    fileprivate static func sendH264DecoderConfig(_ parameterSets: Data,
-                                                  to fd: Int32) throws {
+    fileprivate static func sendDecoderConfig(_ parameterSets: Data, codec: VideoCodec,
+                                              to fd: Int32) throws {
+        try writeExactly(framedPayload(decoderConfigPayload(parameterSets, codec: codec)), to: fd,
+                         deadline: Date().addingTimeInterval(0.4))
+    }
+
+    /// Bincode fixed-int ServerControlPacket::DecoderConfig (ALVR v20.14.1).
+    static func decoderConfigPayload(_ parameterSets: Data, codec: VideoCodec) -> Data {
         var payload = Data()
         appendLittleEndian(UInt32(1), to: &payload) // ServerControlPacket::DecoderConfig
-        appendLittleEndian(UInt32(0), to: &payload) // CodecType::H264
+        appendLittleEndian(codec.alvrDiscriminant, to: &payload) // CodecType
         appendLittleEndian(UInt64(parameterSets.count), to: &payload)
         payload.append(parameterSets)
-        try writeExactly(framedPayload(payload), to: fd,
-                         deadline: Date().addingTimeInterval(0.4))
+        return payload
     }
 
     private static func appendLittleEndian<T: FixedWidthInteger>(_ value: T,

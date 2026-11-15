@@ -18,8 +18,19 @@ run_step "Environment" "$script_dir/doctor.zsh" --core
 
 print
 print "==> Repository hygiene"
-zsh -n packaging/*.zsh packaging/BasaltVRLauncher runtime/scripts/*.zsh scripts/*.zsh
+zsh -n packaging/*.zsh runtime/scripts/*.zsh scripts/*.zsh
 plutil -lint packaging/Info.plist
+# macOS attributes the streamer's audio access to the app that launched it.
+# Without these strings it kills the streamer (microphone, used by BlackHole)
+# or hands it silence (System Audio Recording, used by the Mac's own audio).
+for key in NSMicrophoneUsageDescription NSAudioCaptureUsageDescription; do
+    for plist_source in packaging/Info.plist scripts/trailbridge-app.zsh; do
+        if ! grep -q "<key>$key</key>" "$plist_source"; then
+            print -u2 "$plist_source lacks $key"
+            exit 1
+        fi
+    done
+done
 swift package --package-path streamer dump-package >/dev/null
 (
     ruby -e '

@@ -1,0 +1,120 @@
+Limit one costly pixel shader to a single search step.
+
+A fragment shader from a mesh painting plugin fills empty texels of a baked
+position texture from the nearest painted one. It searches eight directions in
+a loop with no early exit, so every empty texel runs all of it. Games run it
+five to seven times in a row; each run took 3.6 ms on an Apple M4, which is more
+than a frame at 72 Hz and shows up as constant micro-stutter at any resolution.
+
+Stop the loop after one iteration for this shader only, identified by its
+bytecode hash. Measured in the game: such frames fell from 1534 to 24 in about
+ten minutes, and the painted result looks the same. The variant digest changes
+for this shader alone, so no other shader cache entry is invalidated.
+diff --git a/src/airconv/airconv_public.h b/src/airconv/airconv_public.h
+index 517ff0a..6076b11 100644
+--- a/src/airconv/airconv_public.h
++++ b/src/airconv/airconv_public.h
+@@ -225,6 +225,7 @@ enum SM50_SHADER_METAL_VERSION {
+ enum SM50_SHADER_FLAG {
+   SM50_SHADER_FLAG_SAMPLE_NAN_TO_ZERO = 1 << 0,
+   SM50_SHADER_FLAG_DEFUSE_FMA = 1 << 1,
++  SM50_SHADER_FLAG_LIMIT_FIRST_LOOP = 1 << 2,
+ };
+ 
+ struct SM50_SHADER_COMMON_DATA {
+diff --git a/src/airconv/dxbc_converter.cpp b/src/airconv/dxbc_converter.cpp
+index db5b795..23be784 100644
+--- a/src/airconv/dxbc_converter.cpp
++++ b/src/airconv/dxbc_converter.cpp
+@@ -26,6 +26,36 @@
+ 
+ #include "ftl.hpp"
+ 
++// Stops the shader's first counted loop after one iteration. The loop must
++// keep the shape `br (fcmp ult counter, bound), body, exit`; anything else
++// is left as it is.
++static void
++limitFirstLoop(llvm::Module &M, const char *FunctionName) {
++  using namespace llvm;
++  Function *F = M.getFunction(FunctionName);
++  if (!F)
++    return;
++  for (BasicBlock &BB : *F) {
++    if (!BB.getName().startswith("loop_entrance"))
++      continue;
++    auto *Branch = dyn_cast<BranchInst>(BB.getTerminator());
++    if (!Branch || !Branch->isConditional() ||
++        !Branch->getSuccessor(0)->getName().startswith("after_breakc"))
++      continue;
++    auto *Compare = dyn_cast<FCmpInst>(Branch->getCondition());
++    if (!Compare || Compare->getPredicate() != CmpInst::FCMP_ULT)
++      continue;
++    IRBuilder<> Builder(Branch);
++    Builder.setFastMathFlags(Compare->getFastMathFlags());
++    Value *Counter = Compare->getOperand(0);
++    Value *First = Builder.CreateFCmp(
++        CmpInst::FCMP_ULT, Counter, ConstantFP::get(Counter->getType(), 1.0)
++    );
++    Branch->setCondition(Builder.CreateAnd(Compare, First));
++    return;
++  }
++}
++
+ class SM50CompiledBitcodeInternal {
+ public:
+   llvm::SmallVector<char, 0> vec;
+@@ -1426,6 +1456,11 @@ AIRCONV_API int SM50Compile(
+ 
+   runOptimizationPasses(*pModule);
+ 
++  SM50_SHADER_COMMON_DATA *common_data = nullptr;
++  if (dxmt::dxbc::args_get_data<SM50_SHADER_COMMON, SM50_SHADER_COMMON_DATA>(pArgs, &common_data) &&
++      (common_data->flags & SM50_SHADER_FLAG_LIMIT_FIRST_LOOP))
++    limitFirstLoop(*pModule, FunctionName);
++
+   // Serialize AIR
+   auto compiled = new SM50CompiledBitcodeInternal();
+ 
+diff --git a/src/d3d11/d3d11_shader.cpp b/src/d3d11/d3d11_shader.cpp
+index 687b94a..f7af8e2 100644
+--- a/src/d3d11/d3d11_shader.cpp
++++ b/src/d3d11/d3d11_shader.cpp
+@@ -162,20 +162,38 @@ CreateVariantShader(MTLD3D11Device *pDevice, ManagedShader shader,
+       pDevice, shader, std::move(proc), func_name, variant_digest);
+ };
+ 
++// A pixel shader that fills empty texels from the nearest painted one, in a
++// loop with no early exit. Run several times in a row, it costs more than a
++// whole frame on Apple GPUs. One step of the search keeps the result intact.
++static bool
++limitsFirstLoop(ManagedShader shader) {
++  return shader->sha1().string() == "92fe2364dd2d1027b7b54d0f2da69ca7c24c4368";
++}
++
+ template <>
+ std::unique_ptr<CompiledShader>
+ CreateVariantShader(MTLD3D11Device *pDevice, ManagedShader shader,
+                     ShaderVariantPixel variant) {
++  const bool limit_first_loop = limitsFirstLoop(shader);
+   Sha1HashState h;
+   h.update(getGlobalShaderFlag());
+   h.update(variant.sample_mask);
+   h.update(variant.unorm_output_reg_mask);
+   h.update(variant.dual_source_blending);
+   h.update(variant.disable_depth_output);
++  // Only this shader gets a new cache key; every other entry stays valid.
++  if (limit_first_loop)
++    h.update(SM50_SHADER_FLAG_LIMIT_FIRST_LOOP);
+   auto variant_digest = h.final();
+   std::string func_name = "ps_" + shader->sha1().string().substr(0, 8) + "_" + variant_digest.string();
+ 
+   auto proc = [=](const char *func_name, SM50_SHADER_COMMON_DATA *common) -> sm50_bitcode_t  {
++    SM50_SHADER_COMMON_DATA limited_common;
++    if (limit_first_loop) {
++      limited_common = *common;
++      limited_common.flags = (SM50_SHADER_FLAG)(common->flags | SM50_SHADER_FLAG_LIMIT_FIRST_LOOP);
++      common = &limited_common;
++    }
+     SM50_SHADER_PSO_PIXEL_SHADER_DATA data;
+     data.type = SM50_SHADER_PSO_PIXEL_SHADER;
+     data.next = common;

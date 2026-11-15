@@ -46,6 +46,40 @@ decision in `docs/DXMT-INTEROP.md`). These patches are MIT like the rest of Basa
   comment predates texture-array support and says Basalt rejects array swapchains; the
   runtime now accepts them (each slice is copied into a per-eye IOSurface export), but
   multipass remains the path Unity takes.
+- `patches/0005-include-functional-for-libcxx.patch` and
+  `patches/0007-include-iterator-for-libcxx.patch` — include the standard headers
+  required by `std::equal_to` and `std::back_inserter` when building with LLVM-MinGW.
+- `patches/0006-use-public-metal-atomic-api.patch` — use Metal's public atomic add
+  wrapper for the tessellation work counter; the private compiler intrinsic's
+  signature differs between toolchain versions.
+- `patches/0008-respect-xdg-cache-home.patch` — resolve relative AIR and Metal cache
+  paths under an absolute `XDG_CACHE_HOME` when provided. Without it, preserve the
+  upstream Darwin cache location.
+- `patches/0011-opt-in-failure-diagnostics.patch` — with
+  `DXMT_BASALT_DIAGNOSTICS=1` and an absolute, symlink-free `BASALT_REPO_ROOT`,
+  write private per-process results below `.local/diagnostics/dxmt-<pid>-<uuid>/`:
+  - Failed render, mesh and compute pipeline descriptors, errors, function names
+    and the exact AIR-containing `.metallib` inputs, including cached inputs.
+  - The first Metal command-buffer failure, its identity and label, plus encoder
+    labels and execution status when Metal supplies them. The first error also
+    gets one `err:` line in the session log.
+  Instrumentation is off by default. It retains shader-library bytes and enables
+  additional Metal error tracking only in diagnostic mode, which increases memory
+  and CPU overhead. Invalid output roots disable it; there is no fallback output
+  path. Dumps may contain game shaders and are local debugging artifacts.
+- `patches/0012-sink-discard-into-merge.patch` — move `discard_fragment` from
+  branches whose only successor is a merge block into that merge block. Apple's
+  Metal compiler service crashes on a block with PHI nodes when every predecessor
+  calls `air.discard_fragment`; the crash also loses other pipelines being
+  compiled in the same service process. The discard may be followed by
+  side-effect-free instructions, and the pass repeats until no block has the
+  shape. A predecessor that branches conditionally, or runs a side effect after
+  its discard, is left alone.
+- `patches/0013-limit-mesh-paint-dilation-loop.patch` — stop the search loop of
+  one pixel shader, identified by its bytecode hash, after a single iteration.
+  The shader fills empty texels of a baked position texture and has no early
+  exit; run several times in a row it costs more than a frame on Apple GPUs.
+  Only this shader's cache key changes.
 
 ## Building
 
@@ -69,3 +103,7 @@ set — never mix them with stock v0.80 binaries.
 and `BASALT_EXPECT_IOSURFACE=1`, NT-handle textures must republish nonzero, distinct
 IOSurfaceIDs; without the gate the GUID must be absent. `test-dxmt.zsh` remains the stock
 regression gate.
+
+`test-dxmt.zsh --fork-only` requires built fork artifacts and runs only the fork
+gates. This is useful when stock has already been checked or its fixed Darwin
+cache location is unsuitable. It explicitly reports that stock was not rerun.

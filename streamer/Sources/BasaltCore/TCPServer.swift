@@ -4,10 +4,9 @@ import Network
 /// Minimal TCP fan-out server: every connected client receives the raw
 /// Annex-B H.264 byte stream.
 ///
-/// This is the M1 stand-in for ALVR's transport (which packetizes NALs over
-/// its own protocol with time-sync and retransmission); the interface —
-/// "broadcast encoded frames, tell me when someone connects" — is the same
-/// one the ALVR bridge will implement in M2.
+/// Clients such as `ffplay` read it directly. Headset sessions use ALVR's
+/// transport instead, which packetizes NALs over its own protocol with
+/// time-sync and retransmission.
 ///
 /// Hardening:
 /// - binds only to `bindHost` (loopback by default, see StreamerOptions)
@@ -26,13 +25,21 @@ public final class TCPServer: @unchecked Sendable {
     private static let maxPendingBytesPerClient = 8 * 1024 * 1024
 
     private let listener: NWListener
+    private let requestedPort: UInt16
     private let queue = DispatchQueue(label: "basalt.tcp")
     private let queueKey = DispatchSpecificKey<Void>()
     private var connections: [NWConnection] = []
     private var pendingBytes: [ObjectIdentifier: Int] = [:]
     private var startupContinuation: CheckedContinuation<Void, Error>?
 
+    /// A port that another program holds is reported with the port named.
+    static func startupError(_ error: NWError, port: UInt16) -> Error {
+        guard case .posix(let code) = error, code == .EADDRINUSE else { return error }
+        return BasaltError.cannotBind("TCP port \(port)", code: code.rawValue)
+    }
+
     public init(port: UInt16, bindHost: String) throws {
+        requestedPort = port
         guard let nwPort = NWEndpoint.Port(rawValue: port) else {
             throw BasaltError("Invalid port \(port)")
         }
@@ -69,7 +76,7 @@ public final class TCPServer: @unchecked Sendable {
             case .failed(let error):
                 if let continuation = self.startupContinuation {
                     self.startupContinuation = nil
-                    continuation.resume(throwing: error)
+                    continuation.resume(throwing: Self.startupError(error, port: self.requestedPort))
                 } else {
                     self.onFailure?(error)
                 }
@@ -97,6 +104,10 @@ public final class TCPServer: @unchecked Sendable {
                             print("Client disconnected")
                         }
                     }
+                    // A failed connection (the peer reset it) keeps its
+                    // socket until it is cancelled; without this every reset
+                    // left one descriptor open for the rest of the session.
+                    if case .failed = state { connection?.cancel() }
                 default:
                     break
                 }

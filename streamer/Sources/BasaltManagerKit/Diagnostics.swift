@@ -1,61 +1,280 @@
 import Foundation
+import SystemConfiguration
 import BasaltBottleKit
 import BasaltCore
 
 /// Replaces personal and device identifiers in diagnostic text before it can
-/// leave the Mac: the home folder and user name, email addresses, Steam IDs,
-/// headset and Bonjour host names, MAC and IP addresses (loopback is kept),
-/// long hex tokens such as the control-socket token, ADB serials, and
-/// `account=`-style values. Replacements contain no quotes or backslashes,
-/// and any quote a rule matches is put back, so redacting rendered JSON
-/// keeps it valid.
+/// leave the Mac: the home folder and user names, the data and app folders,
+/// disk names, this Mac's names, email addresses, Steam IDs, headset and
+/// Bonjour host names, MAC and IP addresses (loopback is kept), long hex
+/// tokens such as the control-socket token, ADB serials, `account=`-style
+/// values, and the names the streamer prints for audio devices and the
+/// headset. Game, bottle and profile names, versions, numbers and error
+/// texts stay.
 public struct DiagnosticRedactor: Sendable {
     public let homeDirectory: String
     public let userName: String
+    /// Shown as `[data folder]` and `[app folder]`: the folders above them
+    /// are the person's own layout, often on a disk that carries their name.
+    public let dataFolder: String?
+    public let appFolder: String?
+    /// nil: this Mac's own names.
+    let hostNames: [String]?
+    /// nil: the disks connected when a text is redacted.
+    let volumeNames: [String]?
 
-    public init(homeDirectory: String = NSHomeDirectory(), userName: String = NSUserName()) {
-        var home = homeDirectory
-        while home.count > 1, home.hasSuffix("/") { home.removeLast() }
-        self.homeDirectory = home
+    /// The defaults describe this Mac and the folders the app was started
+    /// with; pass `dataFolder` when the person chose another one.
+    public init(homeDirectory: String = NSHomeDirectory(), userName: String = NSUserName(),
+                dataFolder: String? = ProcessInfo.processInfo.environment["BASALT_DATA_DIR"],
+                appFolder: String? = ProcessInfo.processInfo.environment["BASALT_REPO_ROOT"],
+                hostNames: [String]? = nil, volumeNames: [String]? = nil) {
+        self.homeDirectory = Self.withoutTrailingSlashes(homeDirectory)
         self.userName = userName
+        self.dataFolder = dataFolder.map(Self.withoutTrailingSlashes)
+        self.appFolder = appFolder.map(Self.withoutTrailingSlashes)
+        self.hostNames = hostNames
+        self.volumeNames = volumeNames
     }
 
+    /// Plain text: a log, or one value of a report before it is rendered.
     public func redact(_ text: String) -> String {
+        redactIdentifiers(in: Self.redactStreamerLines(in: text))
+    }
+
+    /// Every rule except the streamer's own lines. Replacements contain no
+    /// quotes or backslashes, and any quote a rule matches is put back, so
+    /// redacting rendered JSON keeps it valid.
+    func redactIdentifiers(in text: String) -> String {
         var value = text
-        let nameEnd = #"(?![A-Za-z0-9._-])"#
-        if homeDirectory.count > 1, let home = try? NSRegularExpression(
-            pattern: NSRegularExpression.escapedPattern(for: homeDirectory) + nameEnd) {
-            value = Self.replace(home, in: value, with: "~")
+        for (expression, placeholder) in folderRules() {
+            value = Self.replace(expression, in: value, with: placeholder)
         }
+        value = redactDiskNames(in: value)
         // macOS-style paths outside the home folder and Wine's
-        // drive_c/users/<name>, including JSON-escaped backslashes.
+        // drive_c/users/<name>, with any run of separators: a Wine debug
+        // string doubles its backslashes and JSON doubles them again.
         if !userName.isEmpty, let user = try? NSRegularExpression(
-            pattern: #"(?i)([/\\]users[/\\]{1,2})"#
-                + NSRegularExpression.escapedPattern(for: userName) + nameEnd) {
-            value = Self.replace(user, in: value, with: "$1<user>")
+            pattern: #"(?i)([/\\]users[/\\]+)"# + Self.spellings(of: userName) + Self.nameEnd) {
+            value = Self.replace(user, in: value, with: "$1[user]")
+        }
+        // Another account's folder, or a bottle copied from another Mac.
+        value = Self.replaceGroup(2, of: Self.anyUser, in: value) { name in
+            ["shared", "public"].contains(name.lowercased()) ? nil : "[user]"
+        }
+        value = Self.replace(Self.temporaryFolder, in: value, with: "$1[user]")
+        if let hosts = hostRule() {
+            value = Self.replace(hosts, in: value, with: "[host]")
         }
         for (expression, template) in Self.fixedRules {
             value = Self.replace(expression, in: value, with: template)
         }
         value = Self.replaceMatches(Self.ipv4, in: value) { address in
-            address.hasPrefix("127.") || address == "0.0.0.0" ? nil : "<ipv4>"
+            address.hasPrefix("127.") || address == "0.0.0.0" ? nil : "[ipv4]"
         }
         value = Self.replaceMatches(Self.ipv6, in: value) { address in
             let bare = address.split(separator: "%").first.map(String.init) ?? address
-            return bare == "::" || bare == "::1" ? nil : "<ipv6>"
+            return bare == "::" || bare == "::1" ? nil : "[ipv6]"
         }
-        value = Self.replace(Self.token, in: value, with: "<token>")
-        // UUIDs (session IDs, temporary file names) identify nothing, but
-        // their last group looks like a serial, so match and keep them whole.
+        value = Self.replace(Self.token, in: value, with: "[token]")
+        // UUIDs (session IDs, temporary file names) and the time stamp in a
+        // recording's file name identify nothing, but their digits and
+        // letters look like a serial: match and keep them whole.
         value = Self.replaceMatches(Self.uuidOrSerial, in: value) { match in
-            match.contains("-") ? nil : "<serial>"
+            match.contains("-") || Self.isTimeStamp(match) ? nil : "[serial]"
         }
-        value = Self.replace(Self.account, in: value, with: "$1$2$3<redacted>$4")
+        value = Self.replace(Self.account, in: value, with: "$1$2$3[redacted]$4")
         return value
     }
 
-    /// The fixed patterns below are literals covered by DiagnosticsTests, so
-    /// they compile once instead of on every redaction.
+    // MARK: The streamer's own lines
+
+    /// Lines of basalt-streamer that print a name with no diagnostic use: a
+    /// CoreAudio device ("Ada's AirPods"), the headset's own name, a USB
+    /// serial of any shape. Such a name can hold any character and may run
+    /// to the end of its line, so these rules read plain log lines only,
+    /// never rendered JSON or a Markdown table.
+    static func redactStreamerLines(in text: String) -> String {
+        var value = text
+        for expression in audioDeviceLines {
+            value = replaceGroup(1, of: expression, in: value) { DiagnosticReport.audioCategory($0) }
+        }
+        for expression in audioDeviceListLines {
+            value = replaceGroup(1, of: expression, in: value) { names in
+                names.components(separatedBy: ", ").map { DiagnosticReport.audioCategory($0) }
+                    .joined(separator: ", ")
+            }
+        }
+        value = replace(headsetNameLine, in: value, with: "$1[headset]$2")
+        return replace(usbSerialLine, in: value, with: "$1[serial]$2")
+    }
+
+    /// Group 1 is the device name. The texts are those of
+    /// BasaltStreamer/App.swift and BasaltCore/GameAudioCapture.swift.
+    private static let audioDeviceLines = [
+        #"Game audio output routed to (.+) for this session"#,
+        #"Game audio capture ready: (.+), 48000 Hz stereo PCM16"#,
+        #"game audio: (.+), 48 kHz stereo PCM16"#,
+        #"BASALT_GAME_AUDIO=mac replaces (.+) with the Mac's own output"#,
+        #"(?m)Restored Mac audio output to (.+)$"#,
+        #"(?m)No real Mac audio output found; output remains on (.+)$"#,
+        #"No CoreAudio input device contains '(.+)'; available: "#,
+        #"Audio device name '(.+)' is ambiguous: "#,
+        #"Could not set '(.+)' to \d+ Hz "#,
+        #"'(.+)' did not switch to \d+ Hz within"#,
+        #"CoreAudio input '(.+)' (?:cannot also receive application output|is not available to AVFoundation)"#,
+        #"Could not open '(.+)': .*Grant Microphone access"#,
+        #"Could not attach '(.+)' to audio capture"#,
+        #"Could not configure PCM output for '(.+)'"#,
+        #"Could not start audio capture from '(.+)'"#,
+        // --list-audio-devices
+        #"(?m)^(.+)\t\d+ Hz$"#,
+    ].map(regex)
+
+    /// Group 1 is a list of device names, joined by ", ".
+    private static let audioDeviceListLines = [
+        #"(?m)No CoreAudio input device contains '.+'; available: (.+)$"#,
+        #"(?m)Audio device name '.+' is ambiguous: (.+)$"#,
+    ].map(regex)
+
+    private static let headsetNameLine = regex(
+        #"(ALVR control accepted by ').*(': StreamConfig sent)"#)
+
+    private static let usbSerialLine = regex(#"(USB Quest )\S+( is authorized)"#)
+
+    // MARK: Folders, disks and this Mac's names
+
+    /// Where a file or host name starts and ends: `/Users/adam` is not the
+    /// folder of `ada`.
+    private static let nameStart = #"(?<![\p{L}\p{N}._%-])"#
+    private static let nameEnd = #"(?![\p{L}\p{N}._%-])"#
+
+    private static func withoutTrailingSlashes(_ path: String) -> String {
+        var path = path
+        while path.count > 1, path.hasSuffix("/") { path.removeLast() }
+        return path
+    }
+
+    /// A pattern for one name as text may spell it: as given, composed or
+    /// decomposed (file systems differ on "й"), and percent-encoded as in a
+    /// file URL.
+    private static func spellings(of name: String) -> String {
+        var forms = [name, name.precomposedStringWithCanonicalMapping,
+                     name.decomposedStringWithCanonicalMapping]
+        forms += forms.compactMap { $0.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) }
+        // Swift calls the composed and the decomposed form equal; the
+        // pattern matches code units, so both are kept.
+        var distinct = [String]()
+        for form in forms
+        where !distinct.contains(where: { $0.unicodeScalars.elementsEqual(form.unicodeScalars) }) {
+            distinct.append(form)
+        }
+        return "(?:" + distinct.sorted { $0.utf16.count > $1.utf16.count }
+            .map(NSRegularExpression.escapedPattern(for:)).joined(separator: "|") + ")"
+    }
+
+    /// The data and app folders, then the home folder, the longest path
+    /// first: the data folder is usually inside one of the other two.
+    private func folderRules() -> [(NSRegularExpression, String)] {
+        var rules = [(length: Int, pattern: String, placeholder: String)]()
+        for (folder, placeholder) in [(dataFolder, "[data folder]"), (appFolder, "[app folder]")] {
+            guard let folder, folder.hasPrefix("/") else { continue }
+            let names = folder.split(separator: "/")
+            // One name under the root is too little to tell a folder by.
+            guard names.count > 1 else { continue }
+            // Wine spells a host path as `Z:\Volumes\…`.
+            rules.append((folder.count, "(?i)" + Self.nameStart + #"(?:[A-Z]:[/\\]+|[/\\])"#
+                + names.map { Self.spellings(of: String($0)) }.joined(separator: #"[/\\]+"#)
+                + Self.nameEnd, placeholder))
+        }
+        if homeDirectory.count > 1 {
+            rules.append((homeDirectory.count, homeDirectory
+                .split(separator: "/", omittingEmptySubsequences: false)
+                .map { Self.spellings(of: String($0)) }.joined(separator: "/") + Self.nameEnd, "~"))
+        }
+        return rules.sorted { $0.length > $1.length }.compactMap { rule in
+            (try? NSRegularExpression(pattern: rule.pattern)).map { ($0, rule.placeholder) }
+        }
+    }
+
+    /// `/Volumes/<name>` keeps the rest of the path. Connected disks and
+    /// the disks of the app's own folders are known by name, spaces
+    /// included; any other name runs to the next separator.
+    private func redactDiskNames(in text: String) -> String {
+        var names = volumeNames
+            ?? ((try? FileManager.default.contentsOfDirectory(atPath: "/Volumes")) ?? [])
+        for folder in [dataFolder, appFolder, homeDirectory].compactMap({ $0 }) {
+            let parts = folder.split(separator: "/")
+            if parts.count > 1, parts[0] == "Volumes" { names.append(String(parts[1])) }
+        }
+        names = names.filter { !$0.isEmpty }.sorted { $0.count > $1.count }
+        var value = text
+        if !names.isEmpty, let known = try? NSRegularExpression(
+            pattern: #"(?i)([/\\]Volumes[/\\]+)(?:"#
+                + names.map(Self.spellings(of:)).joined(separator: "|") + ")" + Self.nameEnd) {
+            value = Self.replace(known, in: value, with: "$1[disk]")
+        }
+        value = Self.replace(Self.quotedDisk, in: value, with: "$1[disk]")
+        return Self.replace(Self.anyDisk, in: value, with: "$1[disk]")
+    }
+
+    /// A disk the app does not know, as a whole quoted value (a JSON string
+    /// that is the disk's own path): the name runs to the closing quote.
+    private static let quotedDisk = regex(
+        #"(?i)(?<=")((?:[A-Z]:)?[/\\]+Volumes[/\\]+)(?!\[disk\])[^/\\\r\n"]+(?=\\?")"#)
+
+    /// A disk the app does not know: up to the next separator on the line,
+    /// or one word when the path ends with the name. Punctuation that ends a
+    /// path in a sentence ends the name too, and so does a space before the
+    /// separator (another path begins there); an apostrophe inside a word
+    /// ("Ada's SSD") does not.
+    private static let anyDisk = regex(
+        #"(?i)([/\\]Volumes[/\\]+)(?!\[disk\])"#
+            + #"(?:(?:[^/\\\r\n"';,:=()<>|]|'(?=\p{L}))+?(?<!\s)(?=[/\\])"#
+            + #"|(?:[^/\\\s"';,:=()<>|]|'(?=\p{L}))+)"#)
+
+    private static let anyUser = regex(#"(?i)([/\\]users[/\\]+)([^/\\\s"'<>|:*?,;()\[\]{}]+)"#)
+
+    /// The per-user temporary and cache root, `/var/folders/xx/<28 characters>`,
+    /// is the same for a user on every start.
+    private static let temporaryFolder = regex(
+        #"((?:/private)?/var/folders/)[A-Za-z0-9_+]{2}/[A-Za-z0-9_+]{10,}"#)
+
+    /// This Mac's names as whole words, in any case: Wine prints the
+    /// computer name in capitals.
+    private func hostRule() -> NSRegularExpression? {
+        var names = [String]()
+        for name in hostNames ?? Self.thisMacNames() {
+            let name = name.trimmingCharacters(in: .whitespaces)
+            // "Adas-Mac-mini.local" also goes by its first label, and
+            // "Ada’s Mac mini" is typed with either apostrophe.
+            names += [name, String(name.prefix { $0 != "." }),
+                      name.replacingOccurrences(of: "’", with: "'")]
+        }
+        // Anything shorter is a word ("Mac") rather than a name.
+        names = names.filter { $0.count >= 4 && $0.lowercased() != "localhost" }
+            .sorted { $0.count > $1.count }
+        guard !names.isEmpty else { return nil }
+        return try? NSRegularExpression(
+            pattern: #"(?i)(?<![\p{L}\p{N}_-])(?:"#
+                + names.map(NSRegularExpression.escapedPattern(for:)).joined(separator: "|")
+                + #")(?![\p{L}\p{N}_-])"#)
+    }
+
+    private static func thisMacNames() -> [String] {
+        var names = [String]()
+        if let name = SCDynamicStoreCopyComputerName(nil, nil) { names.append(name as String) }
+        if let name = SCDynamicStoreCopyLocalHostName(nil) { names.append(name as String) }
+        var buffer = [CChar](repeating: 0, count: Int(MAXHOSTNAMELEN) + 1)
+        if gethostname(&buffer, buffer.count - 1) == 0 { names.append(String(cString: buffer)) }
+        return names
+    }
+
+    // MARK: Fixed patterns
+
+    /// The fixed patterns are literals covered by DiagnosticsTests and
+    /// DiagnosticRedactionTests, so they compile once instead of on every
+    /// redaction.
     private static func regex(_ pattern: String) -> NSRegularExpression {
         try! NSRegularExpression(pattern: pattern)
     }
@@ -63,12 +282,19 @@ public struct DiagnosticRedactor: Sendable {
     /// Applied before addresses: whole values whose parts could otherwise be
     /// mistaken for (or hide) an address.
     private static let fixedRules: [(NSRegularExpression, String)] = [
-        (regex(#"(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b"#), "<email>"),
-        (regex(#"\b7656119\d{10}\b"#), "<steamid>"),
-        (regex(#"\[U:\d:\d+\]"#), "<steamid>"),
-        (regex(#"(?i)\b[A-Z0-9-]+(?:\.[A-Z0-9-]+)*\.client\.alvr\b"#), "<headset>.client.alvr"),
-        (regex(#"(?i)\b[A-Z0-9][A-Z0-9-]*\.local\b"#), "<host>.local"),
-        (regex(#"(?i)(?<![0-9A-F:-])(?:[0-9A-F]{2}[:-]){5}[0-9A-F]{2}(?![0-9A-F:-])"#), "<mac>"),
+        (regex(#"(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b"#), "[email]"),
+        (regex(#"\b7656119\d{10}\b"#), "[steamid]"),
+        (regex(#"\[U:\d:\d+\]"#), "[steamid]"),
+        // Steam keeps each account's files in userdata/<account ID>.
+        (regex(#"(?i)(userdata[/\\]+)\d+"#), "$1[steamid]"),
+        // An environment dump: USER=ada.
+        (regex(#"\b(USER|LOGNAME)=[^\s"',;\\]+"#), "$1=[user]"),
+        // A Wi-Fi name may hold spaces: it runs to the closing quote, a
+        // comma or the end of the line.
+        (regex(#"(?i)\b(ssid\s*[:=]\s*\\?"?)[^"',;\r\n\\]+"#), "$1[wifi]"),
+        (regex(#"(?i)\b[A-Z0-9-]+(?:\.[A-Z0-9-]+)*\.client\.alvr\b"#), "[headset].client.alvr"),
+        (regex(#"(?i)\b[A-Z0-9][A-Z0-9-]*\.local\b"#), "[host].local"),
+        (regex(#"(?i)(?<![0-9A-F:-])(?:[0-9A-F]{2}[:-]){5}[0-9A-F]{2}(?![0-9A-F:-])"#), "[mac]"),
     ]
 
     private static let token = regex(#"(?i)\b[0-9A-F]{32,}\b"#)
@@ -87,11 +313,18 @@ public struct DiagnosticRedactor: Sendable {
         #"(?i)\b[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}\b"#
             + "|" + #"(?-i:\b(?=[A-Z0-9]*[0-9])(?=[A-Z0-9]*[A-Z])[A-Z0-9]{10,20}\b)"#)
 
+    /// `20250101T000000`, as in a recording's file name.
+    private static func isTimeStamp(_ value: String) -> Bool {
+        let parts = value.split(separator: "T", omittingEmptySubsequences: false)
+        return parts.count == 2 && parts[0].count == 8 && parts[1].count == 6
+            && parts.allSatisfy { $0.allSatisfy(\.isASCII) && $0.allSatisfy(\.isNumber) }
+    }
+
     /// The value's quotes, plain or JSON-escaped, are captured and put back:
     /// a closing quote can also end the enclosing JSON string. Values stop at
     /// a lone backslash so JSON escapes such as `\n` stay intact.
     private static let account = regex(
-        #"(?i)\b(account(?:_?name)?|user_?name|login|persona(?:_?name)?|steam_?id(?:64)?|serial(?:_?number)?)(\s*[:=]\s*)((?:\\?")?)(?:[^\s"',;\\]|\\\\)+((?:\\?")?)"#)
+        #"(?i)\b(account(?:_?name)?|user_?name|login|persona(?:_?name)?|steam_?id(?:64)?|serial(?:_?number)?|computer_?name|host_?name)(\s*[:=]\s*)((?:\\?")?)(?:[^\s"',;\\]|\\\\)+((?:\\?")?)"#)
 
     private static func replace(
         _ expression: NSRegularExpression, in text: String, with template: String
@@ -104,14 +337,31 @@ public struct DiagnosticRedactor: Sendable {
     private static func replaceMatches(
         _ expression: NSRegularExpression, in text: String, transform: (String) -> String?
     ) -> String {
+        replaceGroup(0, of: expression, in: text, transform: transform)
+    }
+
+    /// Replaces one capture group of each match with `transform(group)`, or
+    /// keeps it when nil.
+    private static func replaceGroup(
+        _ group: Int, of expression: NSRegularExpression, in text: String,
+        transform: (String) -> String?
+    ) -> String {
         var result = text
         let matches = expression.matches(in: text, range: NSRange(text.startIndex..., in: text))
         for match in matches.reversed() {
-            guard let range = Range(match.range, in: result),
+            guard let range = Range(match.range(at: group), in: result),
                   let replacement = transform(String(result[range])) else { continue }
             result.replaceSubrange(range, with: replacement)
         }
         return result
+    }
+}
+
+extension SessionConsole {
+    /// The session log as Copy and Save hand it out. The log on screen is
+    /// the person's own; a copy is what gets pasted into a public issue.
+    public func exportedLog(redactedWith redactor: DiagnosticRedactor) -> String {
+        redactor.redact(log)
     }
 }
 
@@ -299,7 +549,8 @@ public struct DiagnosticReport: Codable, Equatable, Sendable {
         }
         self.profiles = profiles.map {
             Profile(name: $0.name, bottleName: $0.bottleName, source: $0.source.rawValue,
-                    executable: $0.executable, arguments: $0.arguments,
+                    executable: $0.executable,
+                    arguments: Self.withoutCredentials($0.arguments),
                     environmentKeys: $0.environment.keys.sorted(),
                     hasCustomStreamSettings: profileStreamSettings[$0.name] != nil)
         }
@@ -310,21 +561,44 @@ public struct DiagnosticReport: Codable, Equatable, Sendable {
                                 + recentSessions.map(\.settings)).compactMap(\.audioDeviceName))
         self.defaultStreamSettings = Self.withAudioCategory(defaultStreamSettings)
         self.profileStreamSettings = profileStreamSettings.mapValues(Self.withAudioCategory)
+        // The streamer's own lines are read here, as plain text: a failure
+        // message becomes a table cell and a JSON string later.
         self.currentSession = currentSession
+        self.currentSession.state = DiagnosticRedactor.redactStreamerLines(in: currentSession.state)
         self.recentSessions = recentSessions.map {
             var record = $0
             record.settings = Self.withAudioCategory(record.settings)
+            record.failureReason = record.failureReason.map(DiagnosticRedactor.redactStreamerLines)
             return record
         }
         logTail = log.map { log in
-            Self.tail(of: audioDevices.sorted { $0.count > $1.count }.reduce(log) {
-                $1.isEmpty ? $0 : $0.replacingOccurrences(of: $1, with: Self.audioCategory($1))
-            })
+            Self.tail(of: DiagnosticRedactor.redactStreamerLines(
+                in: audioDevices.sorted { $0.count > $1.count }.reduce(log) {
+                    $1.isEmpty ? $0 : $0.replacingOccurrences(of: $1, with: Self.audioCategory($1))
+                }))
+        }
+    }
+
+    /// A launch argument may be an account name or a password
+    /// (`-login name password`): what follows such a flag is left out.
+    static func withoutCredentials(_ arguments: [String]) -> [String] {
+        let flags: Set = ["login", "user", "username", "account", "password", "pass", "token"]
+        var afterFlag = false
+        return arguments.map { argument in
+            guard argument.hasPrefix("-") || argument.hasPrefix("+") else {
+                return afterFlag ? "[redacted]" : argument
+            }
+            let parts = argument.drop { $0 == "-" || $0 == "+" }
+                .split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
+            let isCredential = parts.first.map { flags.contains($0.lowercased()) } ?? false
+            afterFlag = isCredential && parts.count == 1
+            guard isCredential, parts.count == 2 else { return argument }
+            return argument.prefix { $0 != "=" } + "=[redacted]"
         }
     }
 
     static func audioCategory(_ deviceName: String) -> String {
-        deviceName.localizedCaseInsensitiveContains("BlackHole") ? "BlackHole" : "<audio device>"
+        deviceName.localizedCaseInsensitiveContains("BlackHole") ? "BlackHole" : "[audio device]"
     }
 
     private static func withAudioCategory(_ settings: StreamLaunchSettings) -> StreamLaunchSettings {
@@ -335,13 +609,13 @@ public struct DiagnosticReport: Codable, Equatable, Sendable {
 
     /// Pretty-printed JSON with every string passed through `redactor`.
     public func json(redactedWith redactor: DiagnosticRedactor) throws -> String {
-        redactor.redact(try renderJSON())
+        redactor.redactIdentifiers(in: try renderJSON())
     }
 
     /// GitHub-flavored Markdown, ready to paste into an issue, with every
     /// string passed through `redactor`.
     public func markdown(redactedWith redactor: DiagnosticRedactor) -> String {
-        redactor.redact(renderMarkdown())
+        redactor.redactIdentifiers(in: renderMarkdown())
     }
 
     func renderJSON() throws -> String {
@@ -461,7 +735,12 @@ public struct DiagnosticReport: Codable, Equatable, Sendable {
             settings.connection.label, "\(settings.fps) fps", "\(settings.megabits) Mbps",
             settings.resolution.label, "\(settings.latency.rawValue) latency",
         ]
-        parts.append(settings.audioDeviceName.map { "audio \($0)" } ?? "no game audio")
+        switch settings.gameAudioChoice {
+        case .mac: parts.append("audio Mac output")
+        case .device(let name): parts.append("audio \(name)")
+        case .off: parts.append("no game audio")
+        }
+        if settings.gamePriorityHigh { parts.append("high game priority") }
         return parts.joined(separator: " · ")
     }
 

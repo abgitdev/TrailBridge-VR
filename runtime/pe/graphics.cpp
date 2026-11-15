@@ -1,4 +1,5 @@
 #include "runtime.hpp"
+#include "frame_trace.hpp"
 
 #include "control.hpp"
 
@@ -363,6 +364,7 @@ XrResult XRAPI_CALL destroySession(XrSession session) {
     gSessionDevice = nullptr;
     ReleaseSRWLockExclusive(&gGraphicsLock);
     controlSessionDestroyed(session);
+    frameTraceFlush();
     invalidateSessionLifecycle(session);
     invalidateSpacesForSession(session);
     invalidateSwapchainForSession(session);
