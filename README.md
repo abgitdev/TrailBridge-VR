@@ -22,7 +22,7 @@
   <img alt="Wine 11.10" src="https://img.shields.io/badge/Wine-11.10-6e7681?labelColor=1b1b1f">
   <img alt="DXMT 0.80 fork" src="https://img.shields.io/badge/DXMT-0.80%20fork-6e7681?labelColor=1b1b1f">
   <img alt="ALVR client 20.14.1" src="https://img.shields.io/badge/ALVR%20client-20.14.1-6e7681?labelColor=1b1b1f">
-  <a href="https://www.virustotal.com/gui/file/1d5739686dbf8abdcacf8bfa029a121a9a831b12ac6b145f9df5c9778da77396"><img alt="VirusTotal: 0 of 61 flagged the 0.2.0 DMG" src="https://img.shields.io/badge/VirusTotal-0%2F61%20clean-2ea44f?labelColor=1b1b1f"></a>
+  <a href="https://www.virustotal.com/gui/file/ddbc00941b4196b9630c61cfc47fc92d89280f36495204cea1bf86854e4069dd"><img alt="VirusTotal: no security vendor flagged the 0.2.1 DMG" src="https://img.shields.io/badge/VirusTotal-clean-2ea44f?labelColor=1b1b1f"></a>
   <a href="CONTRIBUTING.md"><img alt="Pull requests welcome" src="https://img.shields.io/badge/PRs-welcome-2ea44f?labelColor=1b1b1f"></a>
 </p>
 
@@ -70,6 +70,9 @@ on [BasaltVR](https://github.com/frenchbaguetteman/BasaltVR).
 ## Screenshots
 
 <p align="center">
+  <img src=".github/assets/screenshot-learning.png" width="70%" alt="Learning: a guide from a new Mac to the first game">
+</p>
+<p align="center">
   <img src=".github/assets/screenshot-library.png" width="49%" alt="Library: add a game from Steam or from a folder">
   <img src=".github/assets/screenshot-steam.png" width="49%" alt="Steam: sign in inside Steam's own window">
 </p>
@@ -102,7 +105,7 @@ VR does not promise stable operation on them. Other games may work but are not v
 
 1. Download `TrailBridge-VR-<version>-macos-arm64.dmg` from
    [Releases](https://github.com/abgitdev/TrailBridge-VR/releases/latest). Each release lists
-   the file's SHA-256 and a VirusTotal report ([0.2.0](https://www.virustotal.com/gui/file/1d5739686dbf8abdcacf8bfa029a121a9a831b12ac6b145f9df5c9778da77396): no security vendor flagged it).
+   the file's SHA-256 and a VirusTotal report ([0.2.1](https://www.virustotal.com/gui/file/ddbc00941b4196b9630c61cfc47fc92d89280f36495204cea1bf86854e4069dd): no security vendor flagged it).
 2. Optionally check the file: `shasum -a 256 ~/Downloads/TrailBridge-VR-*.dmg` must print the
    published SHA-256.
 3. Open the DMG and drag **TrailBridge VR** to **Applications**.
