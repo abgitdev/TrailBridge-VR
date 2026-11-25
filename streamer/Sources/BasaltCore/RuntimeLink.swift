@@ -616,7 +616,8 @@ public final class RuntimeLink: @unchecked Sendable {
             guard let self else { return }
             switch state {
             case .cancelled:
-                // The socket is closed: the connection no longer counts.
+                // The connection no longer counts, though Network.framework
+                // closes its socket only a moment later.
                 self.unauthenticatedConnections.remove(serial)
                 self.updateNewConnectionLimit()
             case .failed:
