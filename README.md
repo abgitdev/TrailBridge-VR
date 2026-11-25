@@ -63,6 +63,8 @@ on [BasaltVR](https://github.com/frenchbaguetteman/BasaltVR).
 - **Game audio** from the Mac itself (macOS 14.2 or newer) or through BlackHole.
 - **Guided setup**: a Learning guide from a new Mac to the first game, and a Setup page that
   downloads Wine, the ALVR client and Android platform tools with checksums.
+- **Diagnostics that stay on the Mac**: each session keeps an excerpt of the game's own log with
+  personal data replaced, and the session log hints at known causes, such as a missing GStreamer.
 - **Clean removal**: one button deletes everything the app stored on the Mac.
 - **10 languages**: English, Russian, Ukrainian, German, Spanish, French, Italian, Polish,
   Japanese and Korean. English and Russian are reviewed; the others are machine translations.
@@ -97,6 +99,7 @@ on [BasaltVR](https://github.com/frenchbaguetteman/BasaltVR).
 | VTOL VR | OpenComposite (OpenVR) | TrailBridge VR switches the game to one render pass per eye; without it the right eye stays black. |
 | BONELAB | The game's own OpenXR | |
 | Blade & Sorcery | OpenComposite (OpenVR) | |
+| Electrician Simulator VR | The game's own OpenXR | Its intro video needs GStreamer, which the Setup page checks for. |
 
 Not tested: Macs with 8 GB or 16 GB of memory, other Mac models and other headsets. TrailBridge
 VR does not promise stable operation on them. Other games may work but are not verified.
