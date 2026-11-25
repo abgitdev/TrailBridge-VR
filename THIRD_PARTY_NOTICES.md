@@ -59,6 +59,9 @@ Only when you start that step, and only from the official source:
   SDK terms apply: https://developer.android.com/studio/terms
 - The BlackHole 2ch 0.7.1 installer from Existential Audio: an optional audio driver that you
   install yourself. GPL-3.0; not bundled.
+- The GStreamer 1.28.1 installer from gstreamer.freedesktop.org: Wine uses it to play videos in
+  games. You install it for all users of the Mac. LGPL-2.1-or-later, with other licenses for some
+  plugins. Not bundled.
 
 ## The DMG
 
@@ -106,5 +109,5 @@ Inside the app:
     are the ones of LLVM 15.0.7; the toolchain's own LLVM is newer and ships only the main
     LLVM license.
 
-Not inside: Wine, Steam, ALVR, OpenComposite, BlackHole, Android platform tools, games and store
-credentials. The app downloads Wine from Gcenx's releases when you start that step.
+Not inside: Wine, Steam, ALVR, OpenComposite, BlackHole, GStreamer, Android platform tools, games
+and store credentials. The app downloads Wine from Gcenx's releases when you start that step.

@@ -291,8 +291,9 @@ it reuses `BasaltBottleKit`, discovers Basalt/Whisky/CrossOver prefixes, parses 
 manifests (including additional library folders), turns installed games into editable profiles,
 starts and owns wired or Wi-Fi streamer plus Wine game processes, and parses the existing
 two-second transport/Quest reports into bounded live chart history. Setup checks cover Apple
-Silicon/macOS, Screen Recording, adb, the pinned Wine/DXMT artifacts, the OpenXR runtime, and
-optional BlackHole audio. Global and per-profile stream settings persist through `UserDefaults`;
+Silicon/macOS, Screen Recording, adb, the pinned Wine/DXMT artifacts, the OpenXR runtime,
+GStreamer for video playback in games, and optional BlackHole audio. Global and per-profile
+stream settings persist through `UserDefaults`;
 audio-enabled launches route output to the loopback for the owned session and restore it afterward.
 The Basalt data root is user-selectable. External prefixes remain read-only, with an explicit
 APFS-cloned import into an isolated pinned engine when a user wants VR support. An ad-hoc-signed

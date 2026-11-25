@@ -40,6 +40,13 @@ GitHub into the data folder you choose. The data folder can be on this Mac's
 disk, an external disk or network storage.
 
 
+GSTREAMER
+
+Wine uses GStreamer to play videos in games. In Setup, click Get GStreamer
+to download the official 1.28.1 package. Install it with an administrator
+account, for all users of this Mac, then click Refresh in TrailBridge VR.
+
+
 CHECK THE DOWNLOAD
 
 To make sure the disk image is the published one, run this in Terminal:

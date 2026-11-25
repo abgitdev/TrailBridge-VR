@@ -124,6 +124,9 @@ VR does not promise stable operation on them. Other games may work but are not v
 ## Requirements
 
 - A Mac with Apple Silicon and macOS 14 or newer, with Rosetta 2. Intel Macs are not supported.
+- Games that play videos need [GStreamer 1.28.1](https://gstreamer.freedesktop.org/data/pkg/osx/1.28.1/gstreamer-1.0-1.28.1-universal.pkg),
+  the package recommended for Wine 11.10. Install it with an administrator account, for all
+  users of this Mac.
 - A Meta Quest headset in developer mode. Only the Quest 3 is tested.
 - Your own Steam account and games you bought, or Windows VR games you own in a folder.
 - Free space on the disk with the data folder: about 720 MB for Wine, plus Steam and the games.

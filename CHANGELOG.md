@@ -13,6 +13,9 @@ All notable changes to TrailBridge VR are documented here.
 - The session log says why a session stays headless: the OpenXR runtime names the missing
   environment, DXMT build or connection, and the app adds a hint when the started file ends within
   seconds, as a launcher that opens the game separately does.
+- Setup checks for GStreamer, which Wine uses to play videos in games, and links to the official
+  package. Diagnostic reports include its status and version when available. Games can still
+  start without it, with one warning per game session in the log.
 
 ## 0.2.1 — 2026-11-15
 

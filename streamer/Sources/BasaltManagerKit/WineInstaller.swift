@@ -17,6 +17,13 @@ public enum PinnedWine {
     public static let releasePage = URL(
         string: "https://github.com/Gcenx/macOS_Wine_builds/releases/tag/11.10")!
 
+    /// The GStreamer version named in the pinned Wine build's requirements.
+    /// Update the version and package link together with the Wine pin.
+    static let gStreamerVersion = "1.28.1"
+    /// The official GStreamer installer for video playback through this Wine build.
+    public static let gStreamerPackageURL = URL(
+        string: "https://gstreamer.freedesktop.org/data/pkg/osx/\(gStreamerVersion)/gstreamer-1.0-\(gStreamerVersion)-universal.pkg")!
+
     /// The archive's size as the app shows it, in the app's language.
     public static var archiveSizeText: String { sizeText(archiveBytes) }
     public static var unpackedSizeText: String { sizeText(unpackedBytes) }

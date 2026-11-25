@@ -27,7 +27,11 @@ Sections are also on ⌘1–⌘5, ⌘R rescans, ⌘. stops the active session, a
 shows the session state with a Stop button.
 
 1. **Setup** checks Apple Silicon and macOS 14, adb, the pinned Wine/DXMT engine, the built OpenXR
-   runtime, optional Screen Recording permission, and optional BlackHole audio. The adb action
+   runtime, optional Screen Recording permission, and optional BlackHole audio. **Video in games
+   (GStreamer)** checks for the system framework and shows its version when available. Its action
+   opens the download of the official GStreamer 1.28.1 package that Wine 11.10 needs. Install it
+   with an administrator account, for all users of this Mac, then click **Refresh**. Games can
+   still launch when the framework is missing. The adb action
    opens the Headset page, which downloads Google's platform tools, and the BlackHole action
    downloads BlackHole's official installer. Build-related actions open the bottle guide because
    compiling the pinned runtime is a developer operation.

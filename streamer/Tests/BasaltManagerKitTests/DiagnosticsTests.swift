@@ -225,6 +225,36 @@ final class DiagnosticsTests: XCTestCase {
         XCTAssertTrue(markdown.contains("### Session log\n\nNot included."))
     }
 
+    func testReportSaysWhenSetupHasNotRun() {
+        let report = makeReport(log: nil, setupChecks: [])
+        XCTAssertTrue(report.setupChecks.isEmpty)
+        XCTAssertTrue(report.markdown(redactedWith: redactor).contains(
+            "### Setup\n\nNo setup checks have run."))
+    }
+
+    func testReportUsesTheEnglishGStreamerSetupCheck() throws {
+        let previous = L10n.language
+        defer { L10n.language = previous }
+        L10n.language = .ru
+        let root = try temporaryDirectory()
+        let framework = root.appendingPathComponent("GStreamer.framework")
+        try FileManager.default.createDirectory(at: framework, withIntermediateDirectories: true)
+        let plist = try PropertyListSerialization.data(
+            fromPropertyList: ["CFBundleShortVersionString": "1.28.1"], format: .xml, options: 0)
+        try plist.write(to: framework.appendingPathComponent("Info.plist"))
+        let checks = SetupInspector(
+            repoRoot: root, manager: BottleManager(root: root, repoRoot: root),
+            rosettaInstalled: { true }, gStreamerFramework: framework).inspect()
+        let report = makeReport(log: nil, setupChecks: checks)
+        let check = try XCTUnwrap(report.setupChecks.first { $0.id == "gstreamer" })
+        XCTAssertEqual(check.title, "Video in games (GStreamer)")
+        XCTAssertEqual(check.status, SetupCheckStatus.ready.rawValue)
+        XCTAssertFalse(check.required)
+        XCTAssertEqual(check.detail, "GStreamer 1.28.1 is installed")
+        XCTAssertTrue(report.markdown(redactedWith: redactor).contains(
+            "- [x] **Video in games (GStreamer)** (optional) — GStreamer 1.28.1 is installed"))
+    }
+
     func testLogTailKeepsTheLastLines() {
         let log = (1...(DiagnosticReport.maximumLogLines + 25)).map { "line \($0)" }
             .joined(separator: "\n") + "\n\n"
@@ -286,7 +316,8 @@ final class DiagnosticsTests: XCTestCase {
                             defaultAudioDevice: String? = nil,
                             failureReason: String = "Steam is open but not signed in.",
                             arguments: [String] = ["-applaunch", "620980"],
-                            root: String = "/Users/ada/BasaltVR") -> DiagnosticReport {
+                            root: String = "/Users/ada/BasaltVR",
+                            setupChecks: [SetupCheck]? = nil) -> DiagnosticReport {
         let engineRoot = URL(fileURLWithPath: root + "/runtime/build/wine")
         let engine = BottleEngine(
             id: "pinned-wine", kind: .pinned,
@@ -328,7 +359,7 @@ final class DiagnosticsTests: XCTestCase {
                 operatingSystem: "macOS 26.0 (Build 25A1)", hardwareModel: "Mac15,8",
                 chip: "Apple M3 Max", architecture: "arm64", memoryGigabytes: 36,
                 processorCount: 14, thermalState: "nominal", lowPowerMode: false),
-            setupChecks: [
+            setupChecks: setupChecks ?? [
                 SetupCheck(id: "runtime", title: "OpenXR runtime",
                            detail: root + "/runtime/build/bin/basalt_openxr.dll",
                            status: .ready, required: true),

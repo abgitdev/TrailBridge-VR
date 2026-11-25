@@ -118,6 +118,8 @@ struct SettingsFileProblem: Equatable {
 @MainActor
 final class BasaltAppModel: ObservableObject {
     @Published var selection = ManagerSection.library
+    /// Updated before publishing the checks from the same scan.
+    private(set) var setupGStreamerVersion: String?
     @Published private(set) var setupChecks = [SetupCheck]()
     @Published private(set) var bottles = [ManagedBottle]()
     @Published private(set) var profiles = [LaunchProfile]()
@@ -545,7 +547,7 @@ final class BasaltAppModel: ObservableObject {
         let repoRoot = repoRoot
         typealias RefreshResult = Result<(
             [ManagedBottle], [LaunchProfile], [DetectedGame],
-            [BottleEngine], [SetupCheck], [GameAudioDevice],
+            [BottleEngine], String?, [SetupCheck], [GameAudioDevice],
             [DiscoveredBottle], [SteamGame], [BSManagerInstance],
             [BSManagerInstallation], [DamagedItem], [DamagedItem]
         ), Error>
@@ -558,7 +560,8 @@ final class BasaltAppModel: ObservableObject {
                 let damagedBottles = try manager.listDamagedBottles()
                 let damagedProfiles = try manager.listDamagedProfiles()
                 let games = GameDetector().detect(bottles: bottles, profiles: profiles)
-                let checks = SetupInspector(repoRoot: repoRoot, manager: manager).inspect()
+                let (checks, gStreamerVersion) = SetupInspector(
+                    repoRoot: repoRoot, manager: manager).inspectWithGStreamerVersion()
                 let audio = (try? GameAudioDeviceDiscovery.inputDevices()) ?? []
                 let discovered = ExternalBottleDiscovery().discover(managed: bottles)
                 let steam = SteamLibraryDiscovery().discover(in: discovered)
@@ -568,7 +571,7 @@ final class BasaltAppModel: ObservableObject {
                 let bsManagerApps = BSManagerInstallationDiscovery().discover(
                     in: bottles)
                 return RefreshResult.success(
-                    (bottles, profiles, games, manager.engines(), checks, audio,
+                    (bottles, profiles, games, manager.engines(), gStreamerVersion, checks, audio,
                      discovered, steam, bsManager, bsManagerApps,
                      damagedBottles, damagedProfiles))
             } catch {
@@ -577,7 +580,7 @@ final class BasaltAppModel: ObservableObject {
         }.value
         switch result {
         case .success(let values):
-            (bottles, profiles, games, engines, setupChecks, audioDevices,
+            (bottles, profiles, games, engines, setupGStreamerVersion, setupChecks, audioDevices,
              discoveredBottles, steamGames, bsManagerInstances,
              bsManagerInstallations, damagedBottles, damagedProfiles) = values
             print("BasaltVR library: \(discoveredBottles.count) bottle(s), "
@@ -621,11 +624,12 @@ final class BasaltAppModel: ObservableObject {
         let manager = manager
         let repoRoot = repoRoot
         let root = dataRoot
-        let checks = await Task.detached {
-            SetupInspector(repoRoot: repoRoot, manager: manager).inspect()
+        let (checks, gStreamerVersion) = await Task.detached {
+            SetupInspector(repoRoot: repoRoot, manager: manager).inspectWithGStreamerVersion()
         }.value
         // A data folder changed meanwhile has its own `refresh()`.
         guard root == dataRoot, checks != setupChecks else { return }
+        setupGStreamerVersion = gStreamerVersion
         setupChecks = checks
     }
 
@@ -1249,6 +1253,8 @@ final class BasaltAppModel: ObservableObject {
             // A failed download is tried again at once: the person has
             // already agreed to it.
             if case .failed = wineInstall { startWineDownload() } else { showingWineDownload = true }
+        case "gstreamer":
+            NSWorkspace.shared.open(PinnedWine.gStreamerPackageURL)
         case "rosetta":
             NSPasteboard.general.clearContents()
             rosettaCommandCopied = NSPasteboard.general.setString(Rosetta.installCommand, forType: .string)
@@ -1636,6 +1642,9 @@ final class BasaltAppModel: ObservableObject {
             }
             // Replaces attachOutput's /dev/null stdin: hello_xr quits at its EOF.
             try HeldOpenStandardInput.run(game)
+            if let warning = console.gStreamerWarning(for: GStreamerInstallation.detect()) {
+                appendLog(warning)
+            }
             gameProcess = game
             gameFocusKeeper.start(
                 gamePID: game.processIdentifier,

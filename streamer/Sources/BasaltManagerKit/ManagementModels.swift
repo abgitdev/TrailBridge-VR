@@ -49,17 +49,25 @@ public struct SetupInspector: @unchecked Sendable {
     public let manager: BottleManager
     private let fileManager: FileManager
     private let rosettaInstalled: @Sendable () -> Bool
+    private let gStreamerFramework: URL
 
     public init(repoRoot: URL, manager: BottleManager,
                 fileManager: FileManager = .default,
-                rosettaInstalled: @escaping @Sendable () -> Bool = { Rosetta.isInstalled() }) {
+                rosettaInstalled: @escaping @Sendable () -> Bool = { Rosetta.isInstalled() },
+                gStreamerFramework: URL = GStreamerInstallation.systemFramework) {
         self.repoRoot = repoRoot
         self.manager = manager
         self.fileManager = fileManager
         self.rosettaInstalled = rosettaInstalled
+        self.gStreamerFramework = gStreamerFramework
     }
 
     public func inspect() -> [SetupCheck] {
+        inspectWithGStreamerVersion().checks
+    }
+
+    /// Keeps the detected version available for Setup's localized detail.
+    public func inspectWithGStreamerVersion() -> (checks: [SetupCheck], gStreamerVersion: String?) {
         let version = ProcessInfo.processInfo.operatingSystemVersion
         let supportedOS = version.majorVersion >= 14
         let arm = ProcessInfo.processInfo.machineHardwareName == "arm64"
@@ -81,7 +89,12 @@ public struct SetupInspector: @unchecked Sendable {
             $0.localizedCaseInsensitiveContains("BlackHole")
         }
 
-        return [
+        let gStreamer = GStreamerInstallation.detect(frameworkURL: gStreamerFramework, fileManager: fileManager)
+        let gStreamerVersion: String? = if case .installed(let version) = gStreamer { version } else { nil }
+        let gStreamerDetail = gStreamer == .missing ? "Not installed"
+            : gStreamerVersion.map { "GStreamer \($0) is installed" } ?? "GStreamer is installed"
+
+        let checks = [
             SetupCheck(
                 id: "mac", title: "Apple Silicon Mac",
                 detail: arm && supportedOS
@@ -115,6 +128,11 @@ public struct SetupInspector: @unchecked Sendable {
                 status: pinnedEngine ? .ready : .actionNeeded,
                 required: true,
                 action: hasPinnedWine ? "Open Build Instructions" : Self.downloadWineAction),
+            // Only games that play video need this system package.
+            SetupCheck(
+                id: "gstreamer", title: "Video in games (GStreamer)", detail: gStreamerDetail,
+                status: gStreamer == .missing ? .actionNeeded : .ready,
+                required: false, action: gStreamer == .missing ? "Get GStreamer…" : nil),
             SetupCheck(
                 id: "runtime", title: "OpenXR runtime",
                 detail: fileManager.fileExists(atPath: runtime.path)
@@ -137,6 +155,7 @@ public struct SetupInspector: @unchecked Sendable {
                 status: hasBlackHole || GameAudioSource.macAudioSupported ? .ready : .actionNeeded,
                 required: false, action: "Get BlackHole…"),
         ]
+        return (checks, gStreamerVersion)
     }
 
     public static func findExecutable(

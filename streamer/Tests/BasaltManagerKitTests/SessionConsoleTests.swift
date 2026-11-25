@@ -3,6 +3,20 @@ import XCTest
 
 @MainActor
 final class SessionConsoleTests: XCTestCase {
+    func testMissingGStreamerWarnsOncePerSession() throws {
+        let console = SessionConsole()
+        console.restart(with: "Starting the game…\n")
+        XCTAssertNil(console.gStreamerWarning(for: .installed(version: nil)))
+        let warning = try XCTUnwrap(console.gStreamerWarning(for: .missing))
+        XCTAssertTrue(warning.contains(PinnedWine.gStreamerPackageURL.absoluteString))
+        XCTAssertTrue(warning.hasSuffix("\n"))
+        XCTAssertNil(console.gStreamerWarning(for: .missing))
+        XCTAssertEqual(console.log, "Starting the game…\n")
+
+        console.restart()
+        XCTAssertEqual(console.gStreamerWarning(for: .missing), warning)
+    }
+
     func testDeviceErrorFinalPartialLineIsCountedAndSourceCanBeReused() {
         let console = SessionConsole()
         let game = NSObject()

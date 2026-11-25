@@ -30,6 +30,12 @@ final class WineInstallerTests: XCTestCase {
         XCTAssertEqual(PinnedWine.unpackedSizeText, "720 MB")
     }
 
+    func testGStreamerPackageMatchesThePinnedWineRequirements() {
+        XCTAssertEqual(PinnedWine.gStreamerVersion, "1.28.1")
+        XCTAssertEqual(PinnedWine.gStreamerPackageURL.absoluteString,
+                       "https://gstreamer.freedesktop.org/data/pkg/osx/1.28.1/gstreamer-1.0-1.28.1-universal.pkg")
+    }
+
     func testInstallsWineWhereTheEngineIsLookedForAndCleansUp() async throws {
         let fixture = try makeFixture()
         let stages = Recorder<WineInstaller.Stage>()

@@ -90,7 +90,8 @@ struct SetupView: View {
                     .lineLimit(1).help(title(check))
                 Spacer(minLength: 0)
                 Chip(text: statusTitle(check), kind: check.status == .ready ? .success
-                     : check.status == .unavailable ? .failed : check.required ? .warning : .neutral)
+                     : check.status == .unavailable ? .failed
+                     : check.required || check.id == "gstreamer" ? .warning : .neutral)
             }
             HStack(alignment: .firstTextBaseline, spacing: 10) {
                 DisclosureGroup {
@@ -181,6 +182,7 @@ struct SetupView: View {
         case "mac": L(.setupMac)
         case "rosetta": L(.setupRosetta)
         case "wine": L(.setupEngine)
+        case "gstreamer": L(.setupGStreamer)
         case "runtime": L(.setupRuntime)
         case "dxmt": L(.setupGraphics)
         case "screen": L(.setupScreen)
@@ -195,6 +197,7 @@ struct SetupView: View {
         case "mac": L(.setupMacHelp)
         case "rosetta": L(.setupRosettaHelp)
         case "wine": L(.setupEngineHelp)
+        case "gstreamer": L(.setupGStreamerHelp)
         case "runtime": L(.setupRuntimeHelp)
         case "dxmt": L(.setupGraphicsHelp)
         case "screen": L(.setupScreenHelp)
@@ -213,6 +216,14 @@ struct SetupView: View {
             check.status == .ready ? L(.setupEngineAvailable)
                 : check.offersWineDownload ? L(.setupEngineNotDownloaded, PinnedWine.download.version)
                 : L(.setupEngineBuild)
+        case "gstreamer":
+            if check.status != .ready {
+                L(.setupGStreamerInstall, L(.menuRefresh))
+            } else if let version = model.setupGStreamerVersion {
+                L(.setupGStreamerVersion, version)
+            } else {
+                L(.setupGStreamerInstalled)
+            }
         case "runtime": L(.setupRuntimeBuild)
         case "dxmt": L(.setupGraphicsBuild)
         case "screen": check.status == .ready ? L(.setupScreenGranted) : L(.setupScreenPrivacy)
@@ -232,6 +243,7 @@ struct SetupView: View {
         case "rosetta": model.rosettaCommandCopied ? L(.diagnosticsCopied) : L(.setupRosettaCopy)
         case "wine" where check.offersWineDownload:
             if case .failed = model.wineInstall { L(.dataFolderRetry) } else { model.wineDownloadTitle }
+        case "gstreamer": L(.setupGStreamerPackage)
         case "wine", "runtime", "dxmt": L(.setupBuildHelp)
         default: check.action ?? ""
         }
@@ -240,6 +252,7 @@ struct SetupView: View {
     private func statusTitle(_ check: SetupCheck) -> String {
         switch check.status {
         case .ready: L(.setupCheckReady)
+        case .actionNeeded where check.id == "gstreamer": L(.setupGStreamerMissing)
         case .actionNeeded: check.required ? L(.setupCheckNeeded) : L(.setupCheckOptional)
         case .unavailable: L(.setupCheckUnavailable)
         }

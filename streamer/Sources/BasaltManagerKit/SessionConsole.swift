@@ -27,6 +27,7 @@ public final class SessionConsole: ObservableObject {
     /// into each other mid-line.
     private var partialLines = [ObjectIdentifier?: String]()
     private var deviceErrorCounts = [ObjectIdentifier?: Int]()
+    private var warnedAboutMissingGStreamer = false
     private var transcript: ConsoleTranscript?
     private var transcriptsBySource = [ObjectIdentifier: ConsoleTranscript]()
 
@@ -62,7 +63,15 @@ public final class SessionConsole: ObservableObject {
         headsetDisconnected = false
         partialLines.removeAll()
         deviceErrorCounts.removeAll()
+        warnedAboutMissingGStreamer = false
         if clearingSamples { samples.removeAll() }
+    }
+
+    /// Supplies the warning the first time a game launch finds GStreamer missing in this session.
+    public func gStreamerWarning(for installation: GStreamerInstallation) -> String? {
+        guard !warnedAboutMissingGStreamer, installation == .missing else { return nil }
+        warnedAboutMissingGStreamer = true
+        return L10n.string(.modelGStreamerMissing, PinnedWine.gStreamerPackageURL.absoluteString)
     }
 
     /// Appends raw output from `source`, logs the lines it completed with

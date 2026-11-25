@@ -2,8 +2,7 @@ import XCTest
 @testable import BasaltBottleKit
 @testable import BasaltManagerKit
 
-/// The Setup checks a packaged app adds: Rosetta, and the Wine it can
-/// download itself.
+/// The packaged app's dependency checks.
 final class SetupInspectorTests: XCTestCase {
     func testRosettaIsWhetherTheMacRunsIntelCode() {
         XCTAssertTrue(Rosetta.isInstalled(runsIntelCode: { true }))
@@ -91,6 +90,44 @@ final class SetupInspectorTests: XCTestCase {
         XCTAssertTrue(missing.allSatisfy(\.isFixedOnSetupPage))
     }
 
+    func testMissingGStreamerOffersThePackageWithoutBlockingReadiness() throws {
+        let fixture = try makeFixture()
+        let check = try XCTUnwrap(inspector(fixture).inspect().first { $0.id == "gstreamer" })
+        XCTAssertEqual(check.title, "Video in games (GStreamer)")
+        XCTAssertEqual(check.detail, "Not installed")
+        XCTAssertEqual(check.status, .actionNeeded)
+        XCTAssertFalse(check.required)
+        XCTAssertFalse(check.isFixedOnSetupPage)
+        XCTAssertEqual(check.action, "Get GStreamer…")
+
+        let mac = SetupCheck(id: "mac", title: "Mac", detail: "", status: .ready, required: true)
+        var snapshot = LearningReadinessSnapshot()
+        snapshot.setupChecks = [mac, check]
+        XCTAssertEqual(LearningReadiness(snapshot).row(.mac)?.status, .ready)
+        var facts = LearningFacts()
+        facts.setupChecks = snapshot.setupChecks
+        XCTAssertTrue(facts.macReady)
+    }
+
+    func testInstalledGStreamerIsReadyWithOrWithoutAVersion() throws {
+        let fixture = try makeFixture()
+        let framework = gStreamerFramework(in: fixture.repo)
+        try FileManager.default.createDirectory(at: framework, withIntermediateDirectories: true)
+        let inspector = inspector(fixture)
+        let check = try XCTUnwrap(inspector.inspect().first { $0.id == "gstreamer" })
+        XCTAssertEqual(check.status, .ready)
+        XCTAssertFalse(check.required)
+        XCTAssertNil(check.action)
+        XCTAssertEqual(check.detail, "GStreamer is installed")
+
+        let plist = try PropertyListSerialization.data(
+            fromPropertyList: ["CFBundleShortVersionString": "1.28.2"], format: .xml, options: 0)
+        try plist.write(to: framework.appendingPathComponent("Info.plist"))
+        let (checks, version) = inspector.inspectWithGStreamerVersion()
+        XCTAssertEqual(version, "1.28.2")
+        XCTAssertEqual(checks.first { $0.id == "gstreamer" }?.detail, "GStreamer 1.28.2 is installed")
+    }
+
     // MARK: - Fixtures
 
     private var isAppleSilicon: Bool {
@@ -114,7 +151,12 @@ final class SetupInspectorTests: XCTestCase {
     private func inspector(_ fixture: (repo: URL, data: URL), rosetta: Bool = true) -> SetupInspector {
         SetupInspector(repoRoot: fixture.repo,
                        manager: BottleManager(root: fixture.data, repoRoot: fixture.repo),
-                       rosettaInstalled: { rosetta })
+                       rosettaInstalled: { rosetta },
+                       gStreamerFramework: gStreamerFramework(in: fixture.repo))
+    }
+
+    private func gStreamerFramework(in repo: URL) -> URL {
+        repo.appendingPathComponent("GStreamer.framework", isDirectory: true)
     }
 
     private func makeWine(at root: URL) throws {
