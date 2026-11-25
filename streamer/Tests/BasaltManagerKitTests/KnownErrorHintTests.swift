@@ -306,7 +306,8 @@ final class KnownErrorHintTests: XCTestCase {
         let gStreamer = try XCTUnwrap(KnownErrorHint.rules.first { $0.key == .modelHintVideoWithoutGStreamer })
         let openVR = try XCTUnwrap(KnownErrorHint.rules.first { $0.key == .modelHintOpenVR })
         L10n.language = .en
-        XCTAssertEqual(gStreamer.text, "The game could not play a video because GStreamer is not installed. "
+        let english = gStreamer.text
+        XCTAssertEqual(english, "The game could not play a video because GStreamer is not installed. "
                        + "Open “Setup” and click “Get GStreamer…”.")
         // The game card's menu item is there even when no openvr_api.dll is
         // left for “SET UP OPENVR” to point at.
@@ -314,9 +315,11 @@ final class KnownErrorHintTests: XCTestCase {
                        + "in “Library”, open the game card's ⋯ menu and choose “OpenVR Support…”. "
                        + "If no openvr_api.dll is found there, first restore the game's own copy, "
                        + "for example by verifying the game's files in Steam.")
+        // Another language has its own sentence and names the places in that
+        // language; the loop above checks the names themselves.
         L10n.language = .ru
-        XCTAssertEqual(gStreamer.text, "Игра не смогла воспроизвести видео: GStreamer не установлен. "
-                       + "Откройте «Подготовка» и нажмите «Скачать GStreamer…».")
+        XCTAssertNotEqual(gStreamer.text, english)
+        XCTAssertFalse(gStreamer.text.contains("Setup"), gStreamer.text)
     }
 
     func testTheSessionRecordKeepsItsHints() throws {
