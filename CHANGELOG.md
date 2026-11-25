@@ -2,7 +2,7 @@
 
 All notable changes to TrailBridge VR are documented here.
 
-## Unreleased
+## 0.2.2 — 2026-11-25
 
 - Every Steam game starts in the headset, not only the verified ones. A profile made by Add Steam
   Game for any other game used to run `steam.exe -applaunch APP_ID`: Steam then started the game
@@ -36,6 +36,8 @@ All notable changes to TrailBridge VR are documented here.
   once, and the diagnostic report lists the hints of recent sessions. GStreamer's harmless
   warnings never give one, nor does Unity's refused first request for OpenXR 1.1 when the game's
   runtime connects after it.
+- The README lists Electrician Simulator VR among the tested games and the diagnostics among the
+  features.
 
 ## 0.2.1 — 2026-11-15
 
