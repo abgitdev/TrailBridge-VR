@@ -70,6 +70,8 @@ final class StringsKO: LocalizationTable {
         .uninstallNone: "없음",
         .modelGamePriority: "게임 프로세스 우선순위: 높음(user-interactive QoS)\n",
         .modelGameExited: "게임 종료 코드: %1$@\n",
+        .modelGameExitedQuickly: "게임이 시작 후 %1$@초 만에 종료되었습니다. 헤드셋에 아무것도 나타나지 않았다면, 실행한 파일이 게임을 별도 프로세스로 여는 런처이거나 게임이 로딩 중에 멈췄을 수 있습니다(위의 “game:” 줄 참고). 게임 본체의 .exe를 실행하려면 라이브러리 → 게임 카드 → ⋯ → %2$@에서 선택하세요.\n",
+        .modelSteamDirectLaunch: "Steam을 거치지 않고 게임을 직접 실행합니다: %1$@\n",
         .modelGameBroughtForward: "게임 창을 다시 맨 앞으로 가져왔습니다. 많은 게임은 Mac에서 창이 맨 앞에 있을 때만 소리를 냅니다.\n",
         .modelGameBringForwardFailed: "게임 창을 맨 앞으로 가져오지 못했습니다. 헤드셋에서 소리가 사라지면 Mac에서 게임 창을 클릭하세요.\n",
         .modelWineCleanupFailed: "Wine 정리 실패: %1$@\n",

@@ -69,6 +69,25 @@ swift run --package-path streamer basaltctl profile show beat-saber-steam
 Repeat `--arg VALUE` and `--env KEY=VALUE` as needed. `--cwd HOST_PATH` optionally selects the
 Wine process's host working directory.
 
+A `steam` profile whose arguments contain `-applaunch APP_ID` is not started through Steam:
+`steam.exe -applaunch` only hands the AppID to the running Steam client, which would start the
+game with its own environment, without `BASALT_CONTROL`, so the headset would stay black. At each
+launch the profile is resolved to the game's own executable (`SteamDirectLaunch`):
+
+1. the executable TrailBridge verified for the game, for the verified games;
+2. else Steam's launch option for the app in `appcache/appinfo.vdf` (versions 39 to 42): the
+   SteamVR option first, then the default and numbered ones, never options for other systems, beta
+   branches, servers or editors; its arguments come first;
+3. else the game folder from the app's `appmanifest_APP_ID.acf` in any library listed in
+   `libraryfolders.vdf`: a Unity player (`Game.exe` beside `Game_Data`), the `.exe` named like the
+   folder, an Unreal `*-Win64-Shipping.exe`, or the only probable game.
+
+An Unreal launcher at the top of the folder is replaced by the game binary it starts, since the
+session lasts as long as the started process. Arguments before `-applaunch` are the Steam client's
+and are dropped; those after the AppID follow. `SteamAppId` and `SteamGameId` are set, so
+Steamworks does not restart the game through Steam. When no file is clearly the game, the launch
+fails with a message asking for the executable in Edit Launch Profile….
+
 ## OpenComposite
 
 OpenComposite is a separate GPL-3.0 project by its authors and is never bundled with TrailBridge.

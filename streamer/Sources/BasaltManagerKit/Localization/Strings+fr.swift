@@ -70,6 +70,8 @@ final class StringsFR: LocalizationTable {
         .uninstallNone: "Aucun",
         .modelGamePriority: "Priorité du processus du jeu : élevée (user-interactive QoS)\n",
         .modelGameExited: "Le jeu s’est arrêté avec le code %1$@\n",
+        .modelGameExitedQuickly: "Le jeu s’est arrêté %1$@ s après son lancement. Si rien n’est apparu dans le casque, le fichier lancé est peut-être un lanceur qui ouvre le jeu dans un processus séparé, ou le jeu s’est arrêté pendant le chargement (voir les lignes « game: » ci-dessus). Pour lancer le .exe du jeu lui-même, choisissez-le dans Bibliothèque → fiche du jeu → ⋯ → %2$@\n",
+        .modelSteamDirectLaunch: "Lancement direct du jeu, sans passer par Steam : %1$@\n",
         .modelGameBroughtForward: "La fenêtre du jeu est de nouveau au premier plan : beaucoup de jeux n’émettent du son que si leur fenêtre est au premier plan sur le Mac.\n",
         .modelGameBringForwardFailed: "Impossible de ramener la fenêtre du jeu au premier plan. Si le casque devient muet, cliquez sur la fenêtre du jeu sur le Mac.\n",
         .modelWineCleanupFailed: "Échec du nettoyage de Wine : %1$@\n",

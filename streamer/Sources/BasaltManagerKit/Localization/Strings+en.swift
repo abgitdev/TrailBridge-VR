@@ -70,6 +70,8 @@ final class StringsEN: LocalizationTable {
         .uninstallNone: "None",
         .modelGamePriority: "Game process priority: high (user-interactive QoS)\n",
         .modelGameExited: "Game exited with status %1$@\n",
+        .modelGameExitedQuickly: "The game ended %1$@ s after it started. If nothing appeared in the headset, the file started may be a launcher that opens the game as a separate process, or the game stopped while loading (see the “game:” lines above). To start the game's own .exe, choose it in Library → game card → ⋯ → %2$@\n",
+        .modelSteamDirectLaunch: "Starting the game itself rather than through Steam: %1$@\n",
         .modelGameBroughtForward: "Brought the game's window back to the front: many games play sound only while their window on the Mac is in front.\n",
         .modelGameBringForwardFailed: "Could not bring the game's window back to the front. If the headset goes silent, click the game's window on the Mac.\n",
         .modelWineCleanupFailed: "Wine cleanup failed: %1$@\n",

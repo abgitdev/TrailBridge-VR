@@ -49,7 +49,11 @@ shows the session state with a Stop button.
    with the Steam identity and BSIPA `winhttp` override already set. Toolbar search plus VR-only and tool
    filters are included; playable games sort first in each section. Existing profiles and direct Beat Saber detections appear alongside Steam
    and BSManager games. Steam games in a managed bottle can become `-applaunch APP_ID` profiles
-   without re-entering paths. **Add Game…** (toolbar, `plus`) adds any other Windows game, such as
+   without re-entering paths. Such a profile is never passed to Steam as it is: at each launch
+   TrailBridge starts the game's own executable, chosen from Steam's launch options in
+   `appcache/appinfo.vdf` or, without them, from the game folder (see
+   [Bottles](BOTTLES.md#profiles)), so the game gets the session's OpenXR environment.
+   **Add Game…** (toolbar, `plus`) adds any other Windows game, such as
    one from GOG or itch.io: pick a Basalt bottle and the game's `.exe` inside its `drive_c` (install
    it first with Bottles → ⋯ → Run Windows Installer…). The name comes from the game folder,
    skipping build folders such as `Binaries/Win64` or `bin/win64`. The source is itch.io when a

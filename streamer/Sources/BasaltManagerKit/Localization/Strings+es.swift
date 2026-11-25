@@ -70,6 +70,8 @@ final class StringsES: LocalizationTable {
         .uninstallNone: "Ninguno",
         .modelGamePriority: "Prioridad del proceso del juego: alta (user-interactive QoS)\n",
         .modelGameExited: "El juego terminó con el código %1$@\n",
+        .modelGameExitedQuickly: "El juego terminó %1$@ s después de iniciarse. Si no apareció nada en el visor, el archivo iniciado puede ser un lanzador que abre el juego en otro proceso, o el juego se detuvo al cargar (consulta las líneas «game:» de arriba). Para iniciar el .exe del propio juego, elígelo en Biblioteca → tarjeta del juego → ⋯ → %2$@\n",
+        .modelSteamDirectLaunch: "Iniciando el juego directamente, no a través de Steam: %1$@\n",
         .modelGameBroughtForward: "La ventana del juego vuelve a estar al frente: muchos juegos solo suenan mientras su ventana está al frente en el Mac.\n",
         .modelGameBringForwardFailed: "No se pudo traer al frente la ventana del juego. Si el visor se queda sin sonido, haz clic en la ventana del juego en el Mac.\n",
         .modelWineCleanupFailed: "Falló la limpieza de Wine: %1$@\n",

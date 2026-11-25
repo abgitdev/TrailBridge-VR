@@ -70,6 +70,8 @@ final class StringsUK: LocalizationTable {
         .uninstallNone: "Немає",
         .modelGamePriority: "Пріоритет процесу гри: високий (user-interactive QoS)\n",
         .modelGameExited: "Гра завершилася з кодом %1$@\n",
+        .modelGameExitedQuickly: "Гра завершилася через %1$@ с після запуску. Якщо в шоломі нічого не з’явилося, запущений файл може бути лаунчером, що відкриває гру окремим процесом, або гра зупинилася під час завантаження (див. рядки «game:» вище). Щоб запускати сам .exe гри, виберіть його: Бібліотека → картка гри → ⋯ → %2$@\n",
+        .modelSteamDirectLaunch: "Запускаємо саму гру, а не через Steam: %1$@\n",
         .modelGameBroughtForward: "Вікно гри знову попереду: багато ігор звучать, лише поки їхнє вікно на Mac попереду.\n",
         .modelGameBringForwardFailed: "Не вдалося повернути вікно гри наперед. Якщо в шоломі зник звук, клацніть вікно гри на Mac.\n",
         .modelWineCleanupFailed: "Не вдалося очистити процеси Wine: %1$@\n",

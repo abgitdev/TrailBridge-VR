@@ -2,6 +2,18 @@
 
 All notable changes to TrailBridge VR are documented here.
 
+## Unreleased
+
+- Every Steam game starts in the headset, not only the verified ones. A profile made by Add Steam
+  Game for any other game used to run `steam.exe -applaunch APP_ID`: Steam then started the game
+  without the session's environment, so the OpenXR runtime could not reach the streamer, the
+  headset stayed black and the session ended at once. TrailBridge now starts the game's own
+  executable, chosen from Steam's launch options in `appinfo.vdf` or from the game folder, with
+  `SteamAppId` set. Existing profiles need no change.
+- The session log says why a session stays headless: the OpenXR runtime names the missing
+  environment, DXMT build or connection, and the app adds a hint when the started file ends within
+  seconds, as a launcher that opens the game separately does.
+
 ## 0.2.1 — 2026-11-15
 
 - Setup recognises Rosetta 2 on every macOS version: the check now runs Intel code, as

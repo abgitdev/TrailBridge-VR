@@ -67,6 +67,8 @@ public enum L10nKey: String, CaseIterable, Sendable {
     case uninstallNone
     case modelGamePriority
     case modelGameExited
+    case modelGameExitedQuickly
+    case modelSteamDirectLaunch
     case modelGameBroughtForward
     case modelGameBringForwardFailed
     case modelWineCleanupFailed

@@ -1593,6 +1593,9 @@ final class BasaltAppModel: ObservableObject {
                 appendLog(L10n.string(
                     .modelProfileVariablesDropped, command.droppedEnvironment.joined(separator: ", ")))
             }
+            if command.steamLaunch != nil, let executable = command.arguments.first {
+                appendLog(L10n.string(.modelSteamDirectLaunch, executable))
+            }
             let game = Process()
             game.executableURL = command.executable
             game.arguments = command.arguments
@@ -1612,10 +1615,20 @@ final class BasaltAppModel: ObservableObject {
             }
             game.environment = environment
             attachOutput(of: game, prefix: "game: ")
+            let gameStartedAt = Date()
             game.terminationHandler = { [weak self] game in
                 Task { @MainActor in
                     guard let self, self.gameProcess === game else { return }
                     self.appendLog(L10n.string(.modelGameExited, String(game.terminationStatus)))
+                    // A launcher that starts the game as another process, or
+                    // a game that fails while loading, ends this soon; the
+                    // session ends with it, so say what to try.
+                    let seconds = Date().timeIntervalSince(gameStartedAt)
+                    if seconds < 15 {
+                        self.appendLog(L10n.string(
+                            .modelGameExitedQuickly, String(Int(seconds.rounded())),
+                            L10n.string(.libraryEditProfile)))
+                    }
                     self.gameProcess = nil
                     self.finishSession(.ended)
                     self.stop()

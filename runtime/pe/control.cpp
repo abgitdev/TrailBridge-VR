@@ -195,6 +195,24 @@ bool basaltGateEnabled() {
     return length == 1 && value[0] == '1';
 }
 
+// A session that cannot reach TrailBridge stays headless: xrWaitFrame reports
+// shouldRender == XR_FALSE, the game draws nothing and the headset stays
+// black. Say why once per process, so the session log names a cause.
+void logHeadlessSession(const char* reason) {
+    static LONG logged = 0;
+    if (InterlockedCompareExchange(&logged, 1, 0) == 0) {
+        std::fprintf(stderr,
+                     "Basalt OpenXR: %s; the session runs headless and nothing reaches the "
+                     "headset\n",
+                     reason);
+        std::fflush(stderr);
+    }
+}
+
+constexpr const char* kNotStartedByTrailBridge =
+    "TrailBridge VR did not start this game (a launcher such as Steam may have started it "
+    "without the session's environment)";
+
 XrTime monotonicTime() {
     LARGE_INTEGER counter{};
     LARGE_INTEGER frequency{};
@@ -1155,19 +1173,32 @@ uint32_t queryTextureIOSurfaceId(ID3D11Texture2D* texture) {
 }
 
 void controlSessionCreated(XrSession session, ID3D11Device* device) {
-    if (!basaltGateEnabled() || !probeSessionIOSurface(device)) {
+    if (!basaltGateEnabled()) {
+        logHeadlessSession(kNotStartedByTrailBridge);
+        return;
+    }
+    if (!probeSessionIOSurface(device)) {
+        logHeadlessSession(
+            "the game's Direct3D 11 device cannot share frames with TrailBridge VR (the "
+            "environment's d3d11.dll is not TrailBridge's DXMT build)");
         return;
     }
 
     uint16_t port = 0;
     char token[BASALT_CONTROL_TOKEN_LENGTH + 1]{};
     if (!readControlFile(&port, token, nullptr, nullptr)) {
+        logHeadlessSession(
+            GetEnvironmentVariableA("BASALT_CONTROL", nullptr, 0) == 0
+                ? kNotStartedByTrailBridge
+                : "the BASALT_CONTROL file is missing or invalid (the TrailBridge VR session "
+                  "that started this game has ended)");
         return;
     }
 
     ID3D11Device5* device5 = nullptr;
     if (FAILED(device->QueryInterface(IID_ID3D11Device5,
                                       reinterpret_cast<void**>(&device5)))) {
+        logHeadlessSession("the game's Direct3D 11 device has no ID3D11Device5 fences");
         return;
     }
     ID3D11DeviceContext* context = nullptr;
@@ -1178,6 +1209,7 @@ void controlSessionCreated(XrSession session, ID3D11Device* device) {
     context->Release();
     if (FAILED(contextResult)) {
         device5->Release();
+        logHeadlessSession("the game's Direct3D 11 device has no ID3D11DeviceContext4");
         return;
     }
     ID3D11Fence* fence = nullptr;
@@ -1186,6 +1218,7 @@ void controlSessionCreated(XrSession session, ID3D11Device* device) {
     device5->Release();
     if (FAILED(fenceResult)) {
         context4->Release();
+        logHeadlessSession("the game's Direct3D 11 device could not create a fence");
         return;
     }
 
@@ -1276,6 +1309,9 @@ void controlSessionCreated(XrSession session, ID3D11Device* device) {
         finishDisconnect(state, false);
         release(fence);
         release(context4);
+        logHeadlessSession(
+            "TrailBridge VR's streamer did not accept the runtime's connection (the session "
+            "may have ended, or another TrailBridge VR version started it)");
         return;
     }
     ReleaseSRWLockExclusive(&gControlLock);

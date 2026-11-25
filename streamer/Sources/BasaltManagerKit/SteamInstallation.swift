@@ -61,17 +61,16 @@ public enum SteamInstallation {
     /// Keep ownership of the actual game process. Steam's -applaunch bootstrap
     /// can exit while a game is still running; Steam authentication remains a
     /// separate prerequisite handled by BottleManager's Steam bootstrap.
+    /// Verified games get their executable here. Every other game keeps
+    /// `steam.exe -applaunch APP_ID`, which `BottleManager.profileLaunchCommand`
+    /// resolves to the game's own executable at each launch
+    /// (`SteamDirectLaunch`), so a game update that renames it still starts.
     public static func gameProfile(named name: String, game: SteamGame,
                                     prefix: URL, fileManager: FileManager = .default) throws -> LaunchProfile {
         guard game.bottleOrigin == .managed else {
             throw BottleToolError("Copy the game into a TrailBridge bottle first.")
         }
-        let knownExecutables = [
-            "620980": "Beat Saber.exe",
-            "2669380": "BrutalistickVR.exe",
-            "1032430": "BTVR/Binaries/Win64/BTVR-Win64-Shipping.exe",
-        ]
-        let relative = knownExecutables[game.appID]
+        let relative = SteamDirectLaunch.verifiedExecutables[game.appID]
         let target = relative.map { game.installDirectory.appendingPathComponent($0) }
             ?? game.steamExecutable
         let resolvedPrefix = prefix.resolvingSymlinksInPath().path + "/"

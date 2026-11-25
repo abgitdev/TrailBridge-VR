@@ -148,6 +148,9 @@ public struct BottleLaunchCommand: Equatable, Sendable {
     /// Names of the profile's variables that were left out of `environment`
     /// (`BottleManager.withoutLoaderVariables`), sorted; for one log line.
     public var droppedEnvironment = [String]()
+    /// The game a `steam.exe -applaunch` profile was resolved to, or nil when
+    /// the profile names its executable itself; for one log line.
+    public var steamLaunch: SteamDirectLaunch? = nil
 
     public init(executable: URL, arguments: [String],
                 environment: [String: String], currentDirectory: URL?) {
@@ -1559,31 +1562,27 @@ public final class BottleManager: @unchecked Sendable {
         // A `steam.exe -applaunch` invocation is only a message to the already
         // running Steam client. Wine returns as soon as Steam accepts it, and
         // the eventual game inherits Steam's old environment instead of this
-        // session's BASALT_CONTROL path. Resolve the initial Beat Saber target
-        // to the actual executable so Basalt owns the real game lifetime and
-        // supplies the current OpenXR session environment.
+        // session's BASALT_CONTROL path, so its headset stays black. Resolve
+        // every such profile to the game's own executable (SteamDirectLaunch)
+        // so Basalt owns the real game lifetime and supplies the current
+        // OpenXR session environment. Arguments before `-applaunch` are the
+        // Steam client's; those after the AppID are the game's and follow
+        // the arguments of Steam's own launch option.
+        var steamLaunch: SteamDirectLaunch?
         if profile.source == .steam,
            let appLaunchIndex = profileArguments.firstIndex(of: "-applaunch"),
-           profileArguments.indices.contains(appLaunchIndex + 1),
-           profileArguments[appLaunchIndex + 1] == "620980" {
+           profileArguments.indices.contains(appLaunchIndex + 1) {
+            let appID = profileArguments[appLaunchIndex + 1]
             let prefix = URL(fileURLWithPath: bottle.prefixPath, isDirectory: true)
-            let candidates = [
-                prefix.appendingPathComponent(
-                    "drive_c/Program Files (x86)/Steam/steamapps/common/Beat Saber/Beat Saber.exe"),
-                prefix.appendingPathComponent(
-                    "drive_c/Program Files/Steam/steamapps/common/Beat Saber/Beat Saber.exe"),
-            ]
-            guard let beatSaber = candidates.first(where: {
-                fileManager.fileExists(atPath: $0.path)
-            }) else {
-                throw BottleToolError(
-                    "Steam reports Beat Saber, but its executable is missing from the managed bottle. Open Steam, finish any pending update, then try again.")
-            }
-            windowsExecutable = Self.winePath(for: beatSaber, prefix: prefix)
-            profileArguments.removeSubrange(appLaunchIndex...(appLaunchIndex + 1))
-            workingDirectory = beatSaber.deletingLastPathComponent()
-            environment["SteamAppId"] = "620980"
-            environment["SteamGameId"] = "620980"
+            let launch = try SteamDirectLaunch.resolve(
+                appID: appID, prefix: prefix, gameRoot: try? hostGameRoot(profileName: name),
+                fileManager: fileManager)
+            windowsExecutable = Self.winePath(for: launch.executable, prefix: prefix)
+            profileArguments = launch.arguments + profileArguments.suffix(from: appLaunchIndex + 2)
+            workingDirectory = launch.workingDirectory
+            environment["SteamAppId"] = appID
+            environment["SteamGameId"] = appID
+            steamLaunch = launch
         }
         environment["DXMT_BASALT_IOSURFACE"] = "1"
         environment["BASALT_CONTROL"] = Self.winePath(for: controlFile,
@@ -1624,6 +1623,7 @@ public final class BottleManager: @unchecked Sendable {
             currentDirectory: workingDirectory)
         command.frameTrace = trace
         command.droppedEnvironment = dropped
+        command.steamLaunch = steamLaunch
         return command
     }
 

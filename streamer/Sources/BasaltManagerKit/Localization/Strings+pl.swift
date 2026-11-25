@@ -70,6 +70,8 @@ final class StringsPL: LocalizationTable {
         .uninstallNone: "Brak",
         .modelGamePriority: "Priorytet procesu gry: wysoki (user-interactive QoS)\n",
         .modelGameExited: "Gra zakończyła się z kodem %1$@\n",
+        .modelGameExitedQuickly: "Gra zakończyła się %1$@ s po uruchomieniu. Jeśli w goglach nic się nie pojawiło, uruchomiony plik może być launcherem, który otwiera grę jako osobny proces, albo gra zatrzymała się podczas ładowania (zobacz wiersze „game:” powyżej). Aby uruchamiać sam plik .exe gry, wybierz go w: Biblioteka → karta gry → ⋯ → %2$@\n",
+        .modelSteamDirectLaunch: "Uruchamianie samej gry, nie przez Steam: %1$@\n",
         .modelGameBroughtForward: "Okno gry znów jest na pierwszym planie: wiele gier gra dźwięk tylko wtedy, gdy ich okno na Macu jest na wierzchu.\n",
         .modelGameBringForwardFailed: "Nie udało się przywrócić okna gry na pierwszy plan. Jeśli w goglach zniknie dźwięk, kliknij okno gry na Macu.\n",
         .modelWineCleanupFailed: "Nie udało się posprzątać procesów Wine: %1$@\n",

@@ -70,6 +70,8 @@ final class StringsDE: LocalizationTable {
         .uninstallNone: "Keine",
         .modelGamePriority: "Priorität des Spielprozesses: hoch (user-interactive QoS)\n",
         .modelGameExited: "Spiel mit Status %1$@ beendet\n",
+        .modelGameExitedQuickly: "Das Spiel endete %1$@ s nach dem Start. Erschien nichts im Headset, ist die gestartete Datei vielleicht ein Launcher, der das Spiel als eigenen Prozess öffnet, oder das Spiel hat beim Laden aufgehört (siehe die „game:“-Zeilen oben). Um die .exe des Spiels selbst zu starten, diese unter Bibliothek → Spielkarte → ⋯ → %2$@ auswählen.\n",
+        .modelSteamDirectLaunch: "Das Spiel wird direkt gestartet, nicht über Steam: %1$@\n",
         .modelGameBroughtForward: "Das Spielfenster ist wieder vorne: Viele Spiele geben nur Ton aus, solange ihr Fenster auf dem Mac vorne ist.\n",
         .modelGameBringForwardFailed: "Das Spielfenster ließ sich nicht nach vorne holen. Wird das Headset stumm, auf dem Mac auf das Spielfenster klicken.\n",
         .modelWineCleanupFailed: "Wine-Bereinigung fehlgeschlagen: %1$@\n",

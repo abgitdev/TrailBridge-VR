@@ -70,6 +70,8 @@ final class StringsJA: LocalizationTable {
         .uninstallNone: "なし",
         .modelGamePriority: "ゲームプロセスの優先度：高（user-interactive QoS）\n",
         .modelGameExited: "ゲームがコード%1$@で終了しました\n",
+        .modelGameExitedQuickly: "ゲームは起動から%1$@秒後に終了しました。ヘッドセットに何も表示されなかった場合、起動したファイルがゲームを別のプロセスで開くランチャーであるか、読み込み中にゲームが停止した可能性があります（上の「game:」の行を確認してください）。ゲーム本体の.exeを起動するには、ライブラリ → ゲームカード → ⋯ → %2$@ で選択してください。\n",
+        .modelSteamDirectLaunch: "Steam経由ではなくゲーム本体を起動します：%1$@\n",
         .modelGameBroughtForward: "ゲームのウインドウを最前面に戻しました。多くのゲームは、Mac でウインドウが最前面にあるときだけ音を出します。\n",
         .modelGameBringForwardFailed: "ゲームのウインドウを最前面に戻せませんでした。ヘッドセットの音が消えたら、Mac でゲームのウインドウをクリックしてください。\n",
         .modelWineCleanupFailed: "Wineの整理に失敗しました：%1$@\n",
