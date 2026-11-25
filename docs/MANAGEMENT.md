@@ -104,11 +104,30 @@ shows the session state with a Stop button.
    recording when there is one; of the others the latest 50 are kept. The session log names the
    game's log as the game does (`C:\users\[user]\…`), the session's row in Recent Sessions shows
    the excerpt, and the next launch and a diagnostic report wait until it is saved.
+   Every session, with a game log or without, then gives a hint, once, for each error with a known
+   cause (`KnownErrorHint.rules`), after the line that names the game's log. What its processes
+   print is read as it arrives, so a trimmed or cleared session log loses nothing; the app's own
+   lines, which quote paths, and the excerpt's headers and notes are never read. The hints wait
+   for the game's log to be read, at most as long as a launch waits for it. A
+   `WindowsVideoMedia error` in the game's log or output sends to Setup when GStreamer was missing
+   as the game started, and otherwise says that Media Foundation in Wine could not play the video.
+   A `DllNotFoundException` for `openvr_api` or a failed OpenVR initialisation sends to the game
+   card's **OpenVR Support…**, for OpenComposite, and says to restore the game's own
+   `openvr_api.dll` first, by verifying its files in Steam, when none is found. A failed
+   `xrCreateInstance`, or the runtime's own reason for refusing one, says that the game could not
+   start OpenXR, but only when no runtime connected in the session (the streamer's
+   `OpenXR runtime connected` line, read also when it comes late), so Unity's refused first
+   request for OpenXR 1.1 gives none. A line of the game's or Steam's output that starts with
+   `wineserver crashed` asks to start the game again and to attach a diagnostic report if it
+   happens again. GStreamer's known harmless warnings never give a hint. When another launch or a
+   utility has taken the log over, the hints are not shown there; the session's record keeps them
+   either way.
 8. **Settings** persists global stream defaults and per-profile overrides, selects audio and
    USB/Wi-Fi transport, and allows the managed Basalt data directory to be changed from the UI.
 9. **Diagnostic Report** (Settings, or **Help › Diagnostic Report…**) previews a bug-report
    snapshot: app version, commit, and control protocol; Mac model, macOS, and power state; setup
-   checks; engines, bottles, and profiles; stream settings; the current and recent sessions; and,
+   checks; engines, bottles, and profiles; stream settings; the current and recent sessions, with
+   the hints the session log gave for each; and,
    optionally, the end of the session log and the excerpt of the game's own log: read anew from
    the running game, else the one saved with the latest session. It can be copied as Markdown for
    a GitHub issue or saved as Markdown or JSON. The home folder and user name (also in Wine's
@@ -146,8 +165,9 @@ swift test --package-path streamer
 default/configured/explicit-location and managed-bottle launcher/instance discovery, Windows/host
 path mapping, Beat Saber scanning and source inference, duplicate resolution, stream argument
 generation, live-stat parsing, session history persistence and summaries, stream-health rules,
-metric CSV export, diagnostic redaction, report rendering, and the game log excerpt, its storage
-and its place in the report. `BasaltBottleKitTests` verifies repository/support-root
+metric CSV export, diagnostic redaction, report rendering, the game log excerpt, its storage
+and its place in the report, and the hints for known errors in both logs. `BasaltBottleKitTests`
+verifies repository/support-root
 discovery, maintenance and VR launch commands, the BSManager Steam prerequisite, profile deletion,
 where Unity and Unreal games write their logs inside a prefix, and a real isolated import whose
 source remains unchanged.

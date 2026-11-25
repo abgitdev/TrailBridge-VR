@@ -326,6 +326,12 @@ final class BasaltAppModel: ObservableObject {
     /// The session whose output the log shows. A game log read after
     /// another launch or a utility has taken the log over is not named there.
     private var loggedSessionID: UUID?
+    /// Each session's output and game log, read for known errors until its
+    /// hints are given (`finishKnownErrors`).
+    private var knownErrors = KnownErrorScanner()
+    /// The session whose processes are being started: their output is read
+    /// for its hints, also once it has stopped. From launch to `stop()`.
+    private var scannedSessionID: UUID?
     /// When the current session started streaming; nil before that.
     var streamingStartedAt: Date? { openSession?.record.streamingStartedAt }
     private var hasChosenInitialSection = false
@@ -1412,6 +1418,10 @@ final class BasaltAppModel: ObservableObject {
             }
             openSession = (SessionRecord(profileName: profileName, settings: launchSettings), sessionRoot)
             loggedSessionID = openSession?.record.id
+            if let id = loggedSessionID {
+                knownErrors.begin(id, dataRoot: sessionRoot)
+                scannedSessionID = id
+            }
 
             if let wineShutdown {
                 appendLog(L10n.string(.modelWaitingWineStop))
@@ -1675,11 +1685,15 @@ final class BasaltAppModel: ObservableObject {
             }
             // Replaces attachOutput's /dev/null stdin: hello_xr quits at its EOF.
             try HeldOpenStandardInput.run(game)
-            if let warning = console.gStreamerWarning(for: GStreamerInstallation.detect()) {
+            let gStreamer = GStreamerInstallation.detect()
+            if let warning = console.gStreamerWarning(for: gStreamer) {
                 appendLog(warning)
             }
             gameProcess = game
             runningGame = gameLog
+            // The hints go by GStreamer as the game found it, even when it is
+            // installed while the game runs.
+            if let id = openSession?.record.id { knownErrors.gameStarted(in: id, gStreamer: gStreamer) }
             gameFocusKeeper.start(
                 gamePID: game.processIdentifier,
                 headsetConnected: { [weak self] in self?.console.headsetDisconnected == false },
@@ -1737,6 +1751,9 @@ final class BasaltAppModel: ObservableObject {
             latestGameLogCaptureID = gameLog.sessionID
             pendingGameLogs[gameLog.sessionID] = (gameLog, false)
         }
+        // Its processes' output still counts for its hints until they are given.
+        let scannedSession = scannedSessionID
+        scannedSessionID = nil
         gameProcess = nil
         runningGame = nil
         steamProcess = nil
@@ -1771,6 +1788,10 @@ final class BasaltAppModel: ObservableObject {
                                      wineMayBeRunning: result.failedPrefixes.contains(run.search.prefix.path))
                 noteGameLog(run, saved: saved)
             }
+            // Every session yet to give its hints gives them now, with or
+            // without its game's log, before the transcript closes.
+            // Lines still queued while this teardown blocks may not be read.
+            knownErrors.unfinished.forEach(finishKnownErrors(of:))
             for pending in wineShutdown?.streamers ?? [] where pending.isRunning {
                 pending.terminate()
             }
@@ -1789,20 +1810,23 @@ final class BasaltAppModel: ObservableObject {
         guard let wineCommand else {
             _ = shutDown([])
             if let gameLog { captureGameLog(gameLog, wineMayBeRunning: true) }
+            // A launch sets its Wine command before it starts any process: no pipe to wait for.
+            if let scannedSession { finishKnownErrorsAfterGameLog(of: scannedSession) }
             // An earlier shutdown still running closes it when it finishes.
             if wineShutdown == nil, !gameLogCapturePending { console.closeTranscript() }
             return
         }
-        queueWineShutdown(wineCommand, streamer: streamer, gameLog: gameLog)
+        queueWineShutdown(wineCommand, streamer: streamer, gameLog: gameLog, session: scannedSession)
     }
 
     /// Stops Wine for `command` off the main actor, after any stop already
     /// under way, and lists it in `wineShutdown`: a launch waits for it, and
     /// a later stop runs after it. Every stop goes through here, so that a
     /// late forced sweep can never meet processes started after it. With
-    /// `gameLog`, the game's log is read after the shutdown attempt.
+    /// `gameLog`, the game's log is read after the shutdown attempt; with
+    /// `session`, that session's hints are given after it.
     private func queueWineShutdown(_ command: BottleLaunchCommand, streamer: Process? = nil,
-                                   gameLog: GameLogRun? = nil) {
+                                   gameLog: GameLogRun? = nil, session: UUID? = nil) {
         if wineShutdown == nil {
             wineShutdownFailed = false
             wineShutdownError = nil
@@ -1812,9 +1836,10 @@ final class BasaltAppModel: ObservableObject {
         let task = Task.detached { [weak self] in
             await previous?.task.value
             let result = Self.shutDownWine([command], manager: manager, streamer: streamer)
+            if let session { await self?.waitForOutputToEnd(of: session) }
             await self?.finishWineShutdown(message: result.message, failed: result.failed,
                                            stopped: result.stopped, failedPrefixes: result.failedPrefixes,
-                                           gameLog: gameLog)
+                                           gameLog: gameLog, session: session)
         }
         wineShutdown = (task, (previous?.commands ?? []) + [command],
                         (previous?.streamers ?? []) + [streamer].compactMap { $0 })
@@ -1848,7 +1873,7 @@ final class BasaltAppModel: ObservableObject {
     }
 
     private func finishWineShutdown(message: String?, failed: Bool, stopped: [String], failedPrefixes: [String],
-                                    gameLog: GameLogRun?) {
+                                    gameLog: GameLogRun?, session: UUID?) {
         wineShutdownFailed = wineShutdownFailed || failed
         if failed { wineShutdownError = message }
         // What Steam's panel says about this environment's last stop.
@@ -1866,6 +1891,7 @@ final class BasaltAppModel: ObservableObject {
         pending.streamers.removeAll { !$0.isRunning }
         wineShutdown = pending.commands.isEmpty ? nil : pending
         if let gameLog { captureGameLog(gameLog, wineMayBeRunning: failed) }
+        if let session { finishKnownErrorsAfterGameLog(of: session) }
         if wineShutdown == nil, !sessionState.isActive, !gameLogCapturePending { console.closeTranscript() }
         // A launch waits for this shutdown before it writes its own marker.
         // Wine that could not be stopped keeps it, for the next start.
@@ -2098,6 +2124,9 @@ final class BasaltAppModel: ObservableObject {
             // order; a Task per chunk could run them out of order.
             let source = ObjectIdentifier(pipe)
             console.registerOutputSource(source)
+            if let session = scannedSessionID, let printer = KnownErrorScanner.Printer(rawValue: prefix) {
+                knownErrors.attach(source, printer: printer, to: session)
+            }
             let (chunks, continuation) = AsyncStream.makeStream(of: Data.self)
             pipe.fileHandleForReading.readabilityHandler = { handle in
                 let data = handle.availableData
@@ -2671,7 +2700,8 @@ final class BasaltAppModel: ObservableObject {
 
     /// Names the game's log in the session log, as the excerpt's header
     /// names it, unless another launch or a utility has taken the log over;
-    /// and notes the saved excerpt in the session's history record.
+    /// gives the session's hints after it; and notes the saved excerpt in
+    /// the session's history record.
     private func noteGameLog(_ run: GameLogRun, saved: (excerpt: GameLogExcerpt, file: URL?)?) {
         defer {
             pendingGameLogs[run.sessionID] = nil
@@ -2683,6 +2713,8 @@ final class BasaltAppModel: ObservableObject {
             appendLog(saved?.excerpt.sources.last.map { L10n.string(.modelGameLog, $0.path) }
                 ?? L10n.string(.modelGameLogNone))
         }
+        knownErrors.read(gameLog: saved?.excerpt, of: run.sessionID)
+        finishKnownErrors(of: run.sessionID)
         // The session was recorded when it stopped; a history that has lost
         // it since stays as it is.
         guard let file = saved?.file,
@@ -2691,6 +2723,39 @@ final class BasaltAppModel: ObservableObject {
               history.contains(where: { $0.id == run.sessionID }), run.dataRoot == dataRoot else { return }
         sessionHistory = history
         Task { await refreshRecordings() }
+    }
+
+    /// Once a stopped session's processes are gone, the last lines of its
+    /// pipes, a crashed wineserver's among them, may still be on their way
+    /// to the scanner: they are read until every pipe has closed, for a
+    /// moment at most, and then no more.
+    private func waitForOutputToEnd(of sessionID: UUID) async {
+        await SessionTeardown.wait(upTo: .seconds(2)) { !knownErrors.isReading(sessionID) }
+        knownErrors.stopReading(sessionID)
+    }
+
+    /// Gives the hints of a session that has stopped once its game's log has
+    /// been read: `noteGameLog` gives them then. When that takes longer than
+    /// a launch waits for it, they are given without the game's log.
+    private func finishKnownErrorsAfterGameLog(of sessionID: UUID) {
+        guard pendingGameLogs[sessionID] != nil else { return finishKnownErrors(of: sessionID) }
+        Task { [weak self] in
+            await self?.waitForGameLogCapture(sessionID)
+            self?.finishKnownErrors(of: sessionID)
+        }
+    }
+
+    /// The hints of a session that has stopped, each once: in the session
+    /// log while it still shows the session, and in its history record.
+    private func finishKnownErrors(of sessionID: UUID) {
+        guard let finished = knownErrors.finish(sessionID), !finished.hints.isEmpty else { return }
+        let hints = finished.hints.map(\.text)
+        if loggedSessionID == sessionID { hints.forEach { appendLog($0 + "\n") } }
+        // As the excerpt is: a history that has lost the session stays as it is.
+        guard let history = try? SessionHistoryStore(dataRoot: finished.dataRoot).update(
+                sessionID, { $0.hints = hints }),
+              history.contains(where: { $0.id == sessionID }), finished.dataRoot == dataRoot else { return }
+        sessionHistory = history
     }
 
     private func captureGameLog(_ run: GameLogRun, wineMayBeRunning: Bool) {
@@ -2787,11 +2852,16 @@ final class BasaltAppModel: ObservableObject {
 
     private func appendLog(_ value: String, from source: ObjectIdentifier? = nil,
                            prefix: String = "") {
-        recordLines(console.append(value, from: source, prefix: prefix))
+        let lines = console.append(value, from: source, prefix: prefix)
+        recordLines(lines)
+        knownErrors.read(lines, from: source)
     }
 
     private func finishLog(from source: ObjectIdentifier, prefix: String) {
-        recordLines(console.finish(source, prefix: prefix))
+        let lines = console.finish(source, prefix: prefix)
+        recordLines(lines)
+        knownErrors.read(lines, from: source)
+        knownErrors.close(source)
     }
 
     private func recordLines(_ lines: [String]) {

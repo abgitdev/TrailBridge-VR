@@ -774,6 +774,15 @@ public struct DiagnosticReport: Codable, Equatable, Sendable {
             }
         }
 
+        // Each with the session it belongs to.
+        lines += ["", "### Hints", ""]
+        let hints = recentSessions.flatMap { record in
+            (record.hints ?? []).map {
+                "- \(dates.string(from: record.startedAt)) · \(flat(record.profileName)): \(flat($0))"
+            }
+        }
+        lines += hints.isEmpty ? ["None."] : hints
+
         lines += ["", "### Session log", ""]
         if let logTail, !logTail.isEmpty {
             let fence = Self.fence(for: logTail)

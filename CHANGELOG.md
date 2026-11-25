@@ -29,6 +29,13 @@ All notable changes to TrailBridge VR are documented here.
   diagnostic report; it stays on the Mac.
 - Diagnostic redaction covers more Steam ID formats, hides full names in account fields and shows
   a game folder outside the Wine C: drive as `[game folder]`.
+- When a session ends, the session log gives a short hint for errors whose cause is known, found
+  in the game's own log or output or in Wine's output: a video the game could not play, pointing
+  to Setup when GStreamer is missing; OpenVR that could not start, pointing to the game's OpenVR
+  Support for OpenComposite; OpenXR the game could not start; and a Wine crash. Each hint is given
+  once, and the diagnostic report lists the hints of recent sessions. GStreamer's harmless
+  warnings never give one, nor does Unity's refused first request for OpenXR 1.1 when the game's
+  runtime connects after it.
 
 ## 0.2.1 — 2026-11-15
 

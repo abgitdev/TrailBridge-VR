@@ -262,6 +262,31 @@ final class DiagnosticsTests: XCTestCase {
             .contains("### Game log\n\nNo log of the game was found."))
     }
 
+    func testReportShowsTheHintsOfEachRecentSession() throws {
+        var report = makeReport(log: nil)
+        XCTAssertTrue(report.markdown(redactedWith: redactor).contains("### Hints\n\nNone.\n\n### Session log"))
+
+        let hints = [
+            "The game could not start OpenXR, so nothing reached the headset.",
+            "Wine crashed. Start the game again; if it happens again, attach a diagnostic report "
+                + "(“Help” → “Diagnostic Report…”) to your bug report.",
+        ]
+        report.recentSessions[0].hints = hints
+        let markdown = report.markdown(redactedWith: redactor)
+        XCTAssertTrue(markdown.contains("""
+            ### Hints
+
+            - 2027-01-15T08:00:00Z · beat-saber-vr: \(hints[0])
+            - 2027-01-15T08:00:00Z · beat-saber-vr: \(hints[1])
+
+            ### Session log
+            """), markdown)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(
+            with: Data(try report.json(redactedWith: redactor).utf8)) as? [String: Any])
+        let sessions = try XCTUnwrap(object["recentSessions"] as? [[String: Any]])
+        XCTAssertEqual(sessions.first?["hints"] as? [String], hints)
+    }
+
     func testReportSaysWhenSetupHasNotRun() {
         let report = makeReport(log: nil, setupChecks: [])
         XCTAssertTrue(report.setupChecks.isEmpty)

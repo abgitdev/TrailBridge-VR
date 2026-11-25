@@ -72,6 +72,11 @@ public enum L10nKey: String, CaseIterable, Sendable {
     case modelGameExitedQuickly
     case modelGameLog
     case modelGameLogNone
+    case modelHintVideoWithoutGStreamer
+    case modelHintVideoMediaFoundation
+    case modelHintOpenVR
+    case modelHintOpenXR
+    case modelHintWineCrashed
     case modelSteamDirectLaunch
     case modelGameBroughtForward
     case modelGameBringForwardFailed

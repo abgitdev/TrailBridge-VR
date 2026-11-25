@@ -127,6 +127,9 @@ public final class RuntimeLink: @unchecked Sendable {
     /// The streamer prefixes refusal reasons with this on stderr so the
     /// manager can surface them; the game itself only sees a headless session.
     public static let connectionRefusedLogPrefix = "OpenXR runtime connection refused: "
+    /// The streamer starts its line for an accepted Hello with this on
+    /// stdout: the one sign the manager gets that the game's runtime connected.
+    public static let connectedLogPrefix = "OpenXR runtime connected "
     private var hapticHandler: ((_ hand: AlvrHand, _ durationNanoseconds: UInt64,
                                  _ frequency: Float, _ amplitude: Float) -> Void)?
 

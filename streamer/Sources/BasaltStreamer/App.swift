@@ -272,7 +272,7 @@ struct BasaltStreamerApp {
                 keepAliveWithoutTracking: true)
             link.onHello = { sessionId, renderer in
                 progress?.runtimeConnected()
-                print("OpenXR runtime connected (session \(sessionId), \(renderer))")
+                print(RuntimeLink.connectedLogPrefix + "(session \(sessionId), \(renderer))")
                 encoder.forceKeyframe()
             }
             link.onTeardown = {

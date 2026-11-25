@@ -91,6 +91,10 @@ public struct SessionRecord: Codable, Equatable, Identifiable, Sendable {
     /// in the data folder's `Diagnostics` folder, set once the game has
     /// ended; nil when none was saved.
     public var gameLog: String?
+    /// The hints for known errors in the session's logs (`KnownErrorHint`),
+    /// as the session log gives them, set once the game's log has been
+    /// read; nil when there were none.
+    public var hints: [String]?
 
     public init(id: UUID = UUID(), profileName: String,
                 settings: StreamLaunchSettings, startedAt: Date = Date()) {
