@@ -545,10 +545,18 @@ struct DiagnosticReportSheet: View {
     let model: BasaltAppModel
     @Environment(\.dismiss) private var dismiss
     @State private var includeLog = true
+    @State private var includeGameLog = true
     @State private var report: DiagnosticReport?
+    /// The choices `report` was made with: while it is remade for others,
+    /// nothing is copied or saved, so a log left out never leaves in an
+    /// older report.
+    @State private var reportChoices: [Bool]?
     @State private var markdown = ""
     @State private var copied = false
     @State private var errorMessage: String?
+
+    private var choices: [Bool] { [includeLog, includeGameLog] }
+    private var reportIsCurrent: Bool { report != nil && reportChoices == choices }
 
     /// The folders this app run uses, which may not be the ones it was
     /// started with when the person chose another data folder.
@@ -567,6 +575,7 @@ struct DiagnosticReportSheet: View {
                 if copied { Chip(text: L(.diagnosticsCopied), kind: .success) }
                 if errorMessage != nil { Chip(text: L(.commonError), kind: .failed) }
                 Toggle(L(.diagnosticsIncludeLog), isOn: $includeLog)
+                Toggle(L(.diagnosticsIncludeGameLog), isOn: $includeGameLog)
                 SessionLogView(text: markdown, followsTail: false)
                     .accessibilityLabel(L(.diagnosticsReportPreview))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -593,19 +602,21 @@ struct DiagnosticReportSheet: View {
                     .overlay(RoundedRectangle(cornerRadius: TB.Radius.quietButton).strokeBorder(TB.quietBorder))
             }
             .menuStyle(.button).buttonStyle(.plain).fixedSize()
-            .disabled(report == nil)
+            .disabled(!reportIsCurrent)
             Button(copied ? L(.diagnosticsCopied) : L(.diagnosticsCopy)) {
+                guard reportIsCurrent else { return }
                 NSPasteboard.general.clearContents()
                 copied = NSPasteboard.general.setString(markdown, forType: .string)
             }
-            .disabled(report == nil)
+            .disabled(!reportIsCurrent)
             Button(L(.sheetDone)) { dismiss() }
                 .keyboardShortcut(.defaultAction)
                 .buttonStyle(TBPrimaryButtonStyle())
         }
         .frame(width: 800, height: 560)
-        .onAppear(perform: rebuild)
-        .onChange(of: includeLog) { rebuild() }
+        // Reading the game's log can take a moment; a newer choice replaces
+        // a report still being made.
+        .task(id: choices) { await rebuild() }
         .alert(L(.appName), isPresented: Binding(
             get: { errorMessage != nil },
             set: { if !$0 { errorMessage = nil } }
@@ -616,15 +627,18 @@ struct DiagnosticReportSheet: View {
         }
     }
 
-    private func rebuild() {
-        let snapshot = model.makeDiagnosticReport(includeLog: includeLog)
+    @MainActor private func rebuild() async {
+        let made = choices
+        let snapshot = await model.makeDiagnosticReport(includeLog: made[0], includeGameLog: made[1])
+        guard !Task.isCancelled else { return }
         report = snapshot
+        reportChoices = made
         markdown = snapshot.markdown(redactedWith: redactor)
         copied = false
     }
 
     private func save(asJSON: Bool) {
-        guard let report, let url = FilePanels.saveFile(
+        guard reportIsCurrent, let report, let url = FilePanels.saveFile(
             title: L(.diagnosticsSaveTitle), baseName: "BasaltVR-diagnostics",
             fileExtension: asJSON ? "json" : "md") else { return }
         do {

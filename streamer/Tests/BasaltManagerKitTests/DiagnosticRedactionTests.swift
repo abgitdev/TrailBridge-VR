@@ -114,6 +114,48 @@ final class DiagnosticRedactionTests: XCTestCase {
             #"C:\users\[user]\Saved Games\Blood Trail"#)
     }
 
+    /// A game's own log, written inside its Wine prefix: Unity prints
+    /// Windows paths with forward slashes, Unreal names the Windows user and
+    /// computer, which Wine takes from the Mac.
+    func testRedactsWindowsPathsAndNamesInAGamesOwnLog() {
+        let redactor = makeRedactor(hostNames: ["Adas-Mac-mini"])
+        let expected = [
+            "Logging to C:/users/ada/AppData/LocalLow/Example Studio/Game/Player.log":
+                "Logging to C:/users/[user]/AppData/LocalLow/Example Studio/Game/Player.log",
+            // A bottle made on another Mac or by another app.
+            "C:/users/steamuser/AppData/Local/BTVR/Saved/Logs/BTVR.log":
+                "C:/users/[user]/AppData/Local/BTVR/Saved/Logs/BTVR.log",
+            #"C:\Users\crossover\AppData\LocalLow\Game"#: #"C:\Users\[user]\AppData\LocalLow\Game"#,
+            // The Mac's own folders through Wine's Z: drive, either way round.
+            #"Z:\Users\ada\Games\Game.exe"#: #"Z:\Users\[user]\Games\Game.exe"#,
+            "Z:/Users/ada/Games/Game.exe": "Z:/Users/[user]/Games/Game.exe",
+            "Z:/Users/bob/Games/Game.exe": "Z:/Users/[user]/Games/Game.exe",
+            #"Z:\\Users\\ada\\Games"#: #"Z:\\Users\\[user]\\Games"#,
+            "C:/users/Public/Documents/Game": "C:/users/Public/Documents/Game",
+            "[2026.11.25-10.00.00:000][  0]LogInit: Computer: ADAS-MAC-MINI":
+                "[2026.11.25-10.00.00:000][  0]LogInit: Computer: [host]",
+            // Windows keeps 15 characters of a longer name.
+            "[2026.11.25-10.00.00:000][  0]LogInit: Computer: IVANS-MACBOOK-P":
+                "[2026.11.25-10.00.00:000][  0]LogInit: Computer: [host]",
+            "[2026.11.25-10.00.00:000][  0]LogInit: User: ada":
+                "[2026.11.25-10.00.00:000][  0]LogInit: User: [user]",
+            "LogInit: User: steamuser": "LogInit: User: [user]",
+            // A name with a space or in quotes is replaced whole.
+            #"C:\users\Jane Doe\AppData\Local\BTVR"#: #"C:\users\[user]\AppData\Local\BTVR"#,
+            "C:/Users/Jane Doe/AppData/Local/BTVR": "C:/Users/[user]/AppData/Local/BTVR",
+            #"Z:\Users\Jane O'Brien (Work)\Games"#: #"Z:\Users\[user]\Games"#,
+            #"L"C:\\users\\Jane Doe\\Saved""#: #"L"C:\\users\\[user]\\Saved""#,
+            "| C:\\users\\Jane Doe | ok |": "| C:\\users\\[user] | ok |",
+            #"LogInit: User: "Jane Doe""#: "LogInit: User: [user]",
+            "LogInit: User: Jane Doe": "LogInit: User: [user]",
+            "LogInit: Computer: 'Jane Doe's Mac'\nLogInit: CPU Page size=4096":
+                "LogInit: Computer: [host]\nLogInit: CPU Page size=4096",
+        ]
+        for (text, redacted) in expected {
+            XCTAssertEqual(redactor.redact(text), redacted)
+        }
+    }
+
     /// The exact lines of BasaltStreamer/App.swift and
     /// BasaltCore/GameAudioCapture.swift that print a CoreAudio device name.
     func testRedactsAudioDeviceNamesInStreamerLines() {
@@ -210,6 +252,36 @@ final class DiagnosticRedactionTests: XCTestCase {
         for (text, redacted) in expected {
             XCTAssertEqual(redactor.redact(text), redacted)
         }
+    }
+
+    func testRedactsSteamIDsAndCompleteIdentityValues() {
+        let redactor = makeRedactor()
+        let log = #"""
+            Steam owner 76561190000000000, 76561200000000000, STEAM_0:0:0, STEAM_5:1:42, [U:1:0]
+            Username: Jane Doe
+            User name: Jane "JJ" Doe
+            Account: Jane O'Brien; personal
+            Login: CORP\Robert Example
+            Nickname and Username: "Jane" Doe
+            Persona name=Jane Doe
+            Serial number: Example 42
+            Next line
+            """#
+        XCTAssertEqual(redactor.redact(log), """
+            Steam owner [steamid], [steamid], [steamid], [steamid], [steamid]
+            Username: [redacted]
+            User name: [redacted]
+            Account: [redacted]
+            Login: [redacted]
+            Nickname and Username: [redacted]
+            Persona name=[redacted]
+            Serial number: [redacted]
+            Next line
+            """)
+        let otherNumbers = "AppID 3256020, counters 7656120000000000 and 765612000000000000"
+        XCTAssertEqual(redactor.redact(otherNumbers), otherNumbers)
+        XCTAssertEqual(redactor.redact(#""Account: \"Jane\" Doe\nNext line""#),
+                       #""Account: [redacted]\nNext line""#)
     }
 
     func testKeepsUsefulDiagnosticContent() {

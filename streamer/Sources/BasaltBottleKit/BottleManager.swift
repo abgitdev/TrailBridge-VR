@@ -151,6 +151,9 @@ public struct BottleLaunchCommand: Equatable, Sendable {
     /// The game a `steam.exe -applaunch` profile was resolved to, or nil when
     /// the profile names its executable itself; for one log line.
     public var steamLaunch: SteamDirectLaunch? = nil
+    /// Where the started game writes its own log; nil when its executable
+    /// is not a path on this Mac.
+    public var gameLog: GameLogSearch? = nil
 
     public init(executable: URL, arguments: [String],
                 environment: [String: String], currentDirectory: URL?) {
@@ -1624,6 +1627,10 @@ public final class BottleManager: @unchecked Sendable {
         command.frameTrace = trace
         command.droppedEnvironment = dropped
         command.steamLaunch = steamLaunch
+        let gamePrefix = URL(fileURLWithPath: bottle.prefixPath, isDirectory: true)
+        command.gameLog = (steamLaunch?.executable ?? SteamDirectLaunch.hostURL(
+            forWindowsPath: windowsExecutable, prefix: gamePrefix, fileManager: fileManager))
+            .map { GameLogSearch(prefix: gamePrefix, executable: $0) }
         return command
     }
 

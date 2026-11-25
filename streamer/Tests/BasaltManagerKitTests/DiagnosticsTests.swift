@@ -223,6 +223,43 @@ final class DiagnosticsTests: XCTestCase {
     func testReportCanLeaveOutTheLog() {
         let markdown = makeReport(log: nil).markdown(redactedWith: redactor)
         XCTAssertTrue(markdown.contains("### Session log\n\nNot included."))
+        XCTAssertTrue(markdown.contains("### Game log\n\nNot included."))
+    }
+
+    func testReportShowsTheGamesOwnLog() throws {
+        let excerpt = #"""
+            ==> C:\users\[user]\AppData\LocalLow\Example Studio\Electrician VR\Player.log <==
+            [… 812 lines skipped …]
+            WindowsVideoMedia error 0xc00d36bb while reading C:/Games/sharedassets0.resource
+            ```
+
+            """#
+        var report = makeReport(log: nil)
+        report.gameLog = DiagnosticReport.GameLog(profileName: "electrician", excerpt: excerpt)
+        let markdown = report.markdown(redactedWith: redactor)
+        XCTAssertTrue(markdown.contains("""
+            ### Game log
+
+            <details><summary>Excerpt from electrician: 4 lines</summary>
+
+            ````text
+            ==> C:\\users\\[user]\\AppData\\LocalLow\\Example Studio\\Electrician VR\\Player.log <==
+            [… 812 lines skipped …]
+            WindowsVideoMedia error 0xc00d36bb while reading C:/Games/sharedassets0.resource
+            ```
+            ````
+
+            </details>
+            """), markdown)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(
+            with: Data(try report.json(redactedWith: redactor).utf8)) as? [String: Any])
+        let gameLog = try XCTUnwrap(object["gameLog"] as? [String: Any])
+        XCTAssertEqual(gameLog["profileName"] as? String, "electrician")
+        XCTAssertEqual((gameLog["lines"] as? [String])?.count, 4)
+
+        report.gameLog = DiagnosticReport.GameLog(profileName: "electrician", excerpt: nil)
+        XCTAssertTrue(report.markdown(redactedWith: redactor)
+            .contains("### Game log\n\nNo log of the game was found."))
     }
 
     func testReportSaysWhenSetupHasNotRun() {

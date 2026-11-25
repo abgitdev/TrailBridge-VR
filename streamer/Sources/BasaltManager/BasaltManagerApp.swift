@@ -125,6 +125,15 @@ private final class BasaltApplicationDelegate: NSObject, NSApplicationDelegate, 
         return true
     }
 
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard model.hasClaimedGameLogCapture else { return .terminateNow }
+        Task {
+            await model.waitForClaimedGameLogCaptures()
+            sender.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         // First, and at once: a chapter under way is written to disk before
         // the wait for Wine, which can outlast the time the app is given.

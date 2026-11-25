@@ -922,6 +922,7 @@ private extension StreamHealthIssue.Kind {
 private struct RecentSessionsCard: View {
     @ObservedObject var model: BasaltAppModel
     @State private var confirmingClear = false
+    @State private var shownGameLog: SessionRecord?
 
     private static let visibleCount = 6
 
@@ -955,7 +956,7 @@ private struct RecentSessionsCard: View {
             } else {
                 let visible = Array(model.sessionHistory.prefix(Self.visibleCount))
                 ForEach(visible) { record in
-                    SessionHistoryRow(record: record, model: model)
+                    SessionHistoryRow(record: record, model: model) { shownGameLog = record }
                     if record.id != visible.last?.id {
                         Rectangle().fill(TB.hairline).frame(height: 1).accessibilityHidden(true)
                     }
@@ -964,6 +965,7 @@ private struct RecentSessionsCard: View {
         }
         .cardStyle(padding: 0)
         .clearSessionHistoryDialog(isPresented: $confirmingClear, model: model)
+        .sheet(item: $shownGameLog) { GameLogSheet(record: $0, model: model) }
         .tourTarget(.chapter(.streamRecentSessions))
     }
 }
@@ -971,6 +973,7 @@ private struct RecentSessionsCard: View {
 private struct SessionHistoryRow: View {
     let record: SessionRecord
     @ObservedObject var model: BasaltAppModel
+    let showGameLog: () -> Void
 
     var body: some View {
         HStack(spacing: 10) {
@@ -1001,8 +1004,17 @@ private struct SessionHistoryRow: View {
                 .font(TB.Typography.caption)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            // Name, outcome, chips, date and stats read as one row; Replay stays separate.
+            // Name, outcome, chips, date and stats read as one row; the buttons stay separate.
             .accessibilityElement(children: .combine)
+            if record.gameLog != nil {
+                Button(action: showGameLog) {
+                    Label(L(.streamGameLog), systemImage: "doc.text")
+                }
+                .buttonStyle(TBIconButtonStyle(
+                    accessibilityLabel: L(.streamGameLogHelp, title), compact: true,
+                    foreground: TB.textSecondary))
+                .help(L(.streamGameLogHelp, title))
+            }
             Button {
                 Task { await model.launch(profileName: record.profileName) }
             } label: {
@@ -1102,5 +1114,67 @@ private struct SessionHistoryRow: View {
             parts.append(L(.streamHistoryLatency, latency))
         }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+}
+
+/// The excerpt of the game's own log saved with a session.
+private struct GameLogSheet: View {
+    let record: SessionRecord
+    @ObservedObject var model: BasaltAppModel
+    @Environment(\.dismiss) private var dismiss
+    /// nil while it is read, and when it is gone.
+    @State private var text: String?
+    @State private var read = false
+    @State private var copied = false
+
+    var body: some View {
+        SheetScaffold(symbol: "doc.text.magnifyingglass", title: L(.streamGameLog), subtitle: subtitle) {
+            VStack(alignment: .leading, spacing: 10) {
+                if read, text == nil {
+                    Text(L(.streamGameLogMissing))
+                        .foregroundStyle(TB.textSecondary)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                } else {
+                    SessionLogView(text: text ?? "", followsTail: false)
+                        .accessibilityLabel(L(.streamGameLog))
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .background(TB.sunkenBackground, in: RoundedRectangle(cornerRadius: 8))
+                        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(TB.hairline))
+                }
+                Text(L(.streamGameLogNote)).tbFormFooterStyle()
+            }
+            .padding(20)
+        } actions: {
+            Button(L(.libraryShowInFinder)) {
+                if let file = model.gameLogFile(for: record) {
+                    NSWorkspace.shared.activateFileViewerSelecting([file])
+                }
+            }
+            .disabled(text == nil)
+            Spacer()
+            Button(copied ? L(.diagnosticsCopied) : L(.menuCopy)) {
+                NSPasteboard.general.clearContents()
+                copied = NSPasteboard.general.setString(text ?? "", forType: .string)
+            }
+            .disabled(text == nil)
+            Button(L(.sheetDone)) { dismiss() }
+                .keyboardShortcut(.defaultAction)
+                .buttonStyle(TBPrimaryButtonStyle())
+        }
+        .frame(width: 800, height: 560)
+        .task {
+            text = await model.gameLogText(for: record)
+            read = true
+        }
+    }
+
+    /// The game's Library name and when the session started.
+    private var subtitle: String {
+        let date = DateFormatter()
+        date.locale = L10n.language.locale
+        date.dateFormat = L(.streamHistoryDateFormat)
+        date.shortMonthSymbols = L(.streamHistoryMonths).components(separatedBy: "|")
+        return [model.gameTitle(forProfile: record.profileName), date.string(from: record.startedAt)]
+            .joined(separator: " · ")
     }
 }

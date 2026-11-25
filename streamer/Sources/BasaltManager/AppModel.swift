@@ -307,9 +307,27 @@ final class BasaltAppModel: ObservableObject {
     /// left running there, and the cleanup after it.
     private var leftoverCleanup: (root: URL, task: Task<Void, Never>)?
     /// The session `launch` started; `finishSession` records it to history.
-    private var openSession: SessionRecord?
+    private var openSession: (record: SessionRecord, dataRoot: URL)?
+    /// The game of the running session, whose own log a diagnostic report
+    /// reads anew; nil once the session has stopped.
+    private var runningGame: GameLogRun?
+    /// The latest capture queued, even if it finishes while a report is reading.
+    private var latestGameLogCaptureID: UUID?
+    /// Kept until the excerpt and its history entry have been saved. At
+    /// quit, only captures the background shutdown has yet to claim are read here.
+    private var pendingGameLogs = [UUID: (run: GameLogRun, claimed: Bool)]() {
+        didSet {
+            let pending = !pendingGameLogs.isEmpty
+            if gameLogCapturePending != pending { gameLogCapturePending = pending }
+        }
+    }
+    @Published private(set) var gameLogCapturePending = false
+    var hasClaimedGameLogCapture: Bool { pendingGameLogs.values.contains(where: \.claimed) }
+    /// The session whose output the log shows. A game log read after
+    /// another launch or a utility has taken the log over is not named there.
+    private var loggedSessionID: UUID?
     /// When the current session started streaming; nil before that.
-    var streamingStartedAt: Date? { openSession?.streamingStartedAt }
+    var streamingStartedAt: Date? { openSession?.record.streamingStartedAt }
     private var hasChosenInitialSection = false
     /// Learning's say in the section the app opens on; nil leaves the choice as it is.
     var initialSection: (() -> ManagerSection?)?
@@ -1026,7 +1044,7 @@ final class BasaltAppModel: ObservableObject {
     }
 
     func deleteRecording(_ recording: DiagnosticRecording) async {
-        guard !isRecordingInProgress(recording) else { return }
+        guard !gameLogCapturePending, !isRecordingInProgress(recording) else { return }
         let store = DiagnosticRecordingStore(dataRoot: dataRoot)
         do {
             try await Task.detached { try store.delete(recording) }.value
@@ -1038,6 +1056,7 @@ final class BasaltAppModel: ObservableObject {
 
     /// Deletes every finished recording; a session still running keeps its files.
     func deleteAllRecordings() async {
+        guard !gameLogCapturePending else { return }
         let store = DiagnosticRecordingStore(dataRoot: dataRoot)
         var keeping = Set<String>()
         if sessionState.isActive, let activeRecordingID { keeping.insert(activeRecordingID) }
@@ -1364,6 +1383,7 @@ final class BasaltAppModel: ObservableObject {
             sessionState = .starting(profile: profileName)
             selection = .stream
             let traceManager = manager
+            let sessionRoot = dataRoot
             let recording = recordingChoice(for: profileName)
             // The app's setting or the profile's developer variables turn a
             // recording on. Too little free space withholds only the video.
@@ -1378,6 +1398,9 @@ final class BasaltAppModel: ObservableObject {
                 return (session, plan.videoSkippedForLowSpace)
             }.value
             try ensureCurrent()
+            // Keep the previous transcript open until it can name its game log.
+            await waitForGameLogCapture(latestGameLogCaptureID)
+            try ensureCurrent()
             activeRecordingID = frameTrace.map { $0.csv.deletingPathExtension().lastPathComponent }
             console.restart(
                 with: L10n.string(.modelPreparingProfile, profileName), transcriptURL: frameTrace?.transcript,
@@ -1387,7 +1410,8 @@ final class BasaltAppModel: ObservableObject {
                     .modelRecordingVideoSkipped,
                     DiagnosticRecordingPlan.minimumFreeBytesForVideo >> 30))
             }
-            openSession = SessionRecord(profileName: profileName, settings: launchSettings)
+            openSession = (SessionRecord(profileName: profileName, settings: launchSettings), sessionRoot)
+            loggedSessionID = openSession?.record.id
 
             if let wineShutdown {
                 appendLog(L10n.string(.modelWaitingWineStop))
@@ -1622,6 +1646,15 @@ final class BasaltAppModel: ObservableObject {
             game.environment = environment
             attachOutput(of: game, prefix: "game: ")
             let gameStartedAt = Date()
+            // Read after Wine shutdown (`stop`), and
+            // for a diagnostic report while the game runs.
+            let gameLog = command.gameLog.flatMap { search in
+                openSession.map {
+                    GameLogRun(search: search, gameStartedAt: gameStartedAt, profileName: profileName,
+                               sessionID: $0.record.id, sessionStartedAt: $0.record.startedAt, recording: frameTrace,
+                               dataRoot: sessionRoot)
+                }
+            }
             game.terminationHandler = { [weak self] game in
                 Task { @MainActor in
                     guard let self, self.gameProcess === game else { return }
@@ -1646,13 +1679,14 @@ final class BasaltAppModel: ObservableObject {
                 appendLog(warning)
             }
             gameProcess = game
+            runningGame = gameLog
             gameFocusKeeper.start(
                 gamePID: game.processIdentifier,
                 headsetConnected: { [weak self] in self?.console.headsetDisconnected == false },
                 log: { [weak self] in self?.appendLog($0) })
             activeWineCommand = command
             activeLaunchID = nil
-            openSession?.streamingStartedAt = Date()
+            openSession?.record.streamingStartedAt = Date()
             sessionState = .streaming(profile: profileName)
             selection = .stream
         } catch {
@@ -1698,7 +1732,13 @@ final class BasaltAppModel: ObservableObject {
         let steam = steamProcess
         let streamer = streamerProcess
         let wineCommand = activeWineCommand
+        let gameLog = runningGame
+        if let gameLog {
+            latestGameLogCaptureID = gameLog.sessionID
+            pendingGameLogs[gameLog.sessionID] = (gameLog, false)
+        }
         gameProcess = nil
+        runningGame = nil
         steamProcess = nil
         streamerProcess = nil
         activeWineCommand = nil
@@ -1721,7 +1761,16 @@ final class BasaltAppModel: ObservableObject {
         if waitingForWine {
             // An earlier background shutdown may not finish before exit.
             let commands = (wineShutdown?.commands ?? []) + [wineCommand].compactMap { $0 }
-            let wineStopped = !shutDown(commands).failed && !wineShutdownFailed
+            let result = shutDown(commands)
+            let wineStopped = !result.failed && !wineShutdownFailed
+            // Quitting waits for Wine anyway; the games' logs are read then
+            // too, also one a shutdown still under way has not read yet.
+            let unclaimed = pendingGameLogs.values.filter { !$0.claimed }.map(\.run)
+            for run in unclaimed.sorted(by: { $0.sessionStartedAt < $1.sessionStartedAt }) {
+                let saved = run.save(redactedWith: gameLogRedactor(for: run),
+                                     wineMayBeRunning: result.failedPrefixes.contains(run.search.prefix.path))
+                noteGameLog(run, saved: saved)
+            }
             for pending in wineShutdown?.streamers ?? [] where pending.isRunning {
                 pending.terminate()
             }
@@ -1739,18 +1788,21 @@ final class BasaltAppModel: ObservableObject {
         }
         guard let wineCommand else {
             _ = shutDown([])
+            if let gameLog { captureGameLog(gameLog, wineMayBeRunning: true) }
             // An earlier shutdown still running closes it when it finishes.
-            if wineShutdown == nil { console.closeTranscript() }
+            if wineShutdown == nil, !gameLogCapturePending { console.closeTranscript() }
             return
         }
-        queueWineShutdown(wineCommand, streamer: streamer)
+        queueWineShutdown(wineCommand, streamer: streamer, gameLog: gameLog)
     }
 
     /// Stops Wine for `command` off the main actor, after any stop already
     /// under way, and lists it in `wineShutdown`: a launch waits for it, and
     /// a later stop runs after it. Every stop goes through here, so that a
-    /// late forced sweep can never meet processes started after it.
-    private func queueWineShutdown(_ command: BottleLaunchCommand, streamer: Process? = nil) {
+    /// late forced sweep can never meet processes started after it. With
+    /// `gameLog`, the game's log is read after the shutdown attempt.
+    private func queueWineShutdown(_ command: BottleLaunchCommand, streamer: Process? = nil,
+                                   gameLog: GameLogRun? = nil) {
         if wineShutdown == nil {
             wineShutdownFailed = false
             wineShutdownError = nil
@@ -1761,7 +1813,8 @@ final class BasaltAppModel: ObservableObject {
             await previous?.task.value
             let result = Self.shutDownWine([command], manager: manager, streamer: streamer)
             await self?.finishWineShutdown(message: result.message, failed: result.failed,
-                                           stopped: result.stopped, failedPrefixes: result.failedPrefixes)
+                                           stopped: result.stopped, failedPrefixes: result.failedPrefixes,
+                                           gameLog: gameLog)
         }
         wineShutdown = (task, (previous?.commands ?? []) + [command],
                         (previous?.streamers ?? []) + [streamer].compactMap { $0 })
@@ -1794,7 +1847,8 @@ final class BasaltAppModel: ObservableObject {
         return (message, failed, stopped, failedPrefixes)
     }
 
-    private func finishWineShutdown(message: String?, failed: Bool, stopped: [String], failedPrefixes: [String]) {
+    private func finishWineShutdown(message: String?, failed: Bool, stopped: [String], failedPrefixes: [String],
+                                    gameLog: GameLogRun?) {
         wineShutdownFailed = wineShutdownFailed || failed
         if failed { wineShutdownError = message }
         // What Steam's panel says about this environment's last stop.
@@ -1811,8 +1865,8 @@ final class BasaltAppModel: ObservableObject {
         pending.commands.removeFirst()
         pending.streamers.removeAll { !$0.isRunning }
         wineShutdown = pending.commands.isEmpty ? nil : pending
-        // A launch started meanwhile has already opened its own transcript.
-        if wineShutdown == nil, !sessionState.isActive { console.closeTranscript() }
+        if let gameLog { captureGameLog(gameLog, wineMayBeRunning: failed) }
+        if wineShutdown == nil, !sessionState.isActive, !gameLogCapturePending { console.closeTranscript() }
         // A launch waits for this shutdown before it writes its own marker.
         // Wine that could not be stopped keeps it, for the next start.
         if wineShutdown == nil { endSessionMarker(stopped: !wineShutdownFailed) }
@@ -2118,6 +2172,7 @@ final class BasaltAppModel: ObservableObject {
         activeWineCommand = command
         sessionState = .utility(label)
         console.restart(with: L10n.string(.modelLaunchingUtility, label), clearingSamples: false)
+        loggedSessionID = nil
         if !steamWizardPresented { selection = .stream }
         if let steamInstaller {
             steamSetupBottleID = steamInstaller.id
@@ -2575,22 +2630,25 @@ final class BasaltAppModel: ObservableObject {
     func clearLog() {
         guard !sessionState.isActive else { return }
         console.restart()
+        loggedSessionID = nil
     }
 
     /// Records the open session to history. The first outcome wins: the
     /// `stop()` that follows a game exit or failure finds nothing open.
     private func finishSession(_ outcome: SessionRecord.Outcome, reason: String? = nil) {
-        guard var record = openSession else { return }
+        guard let session = openSession else { return }
         openSession = nil
+        var record = session.record
         // A launch stopped before the game started is not a session.
         guard record.streamingStartedAt != nil || outcome == .failed else { return }
         record.endedAt = Date()
         record.outcome = outcome
         record.failureReason = reason
         do {
-            sessionHistory = try SessionHistoryStore(dataRoot: dataRoot).append(record) { moved in
+            let history = try SessionHistoryStore(dataRoot: session.dataRoot).append(record) { moved in
                 self.appendLog(L10n.string(.modelHistorySetAside, moved.lastPathComponent))
             }
+            if session.dataRoot == dataRoot { sessionHistory = history }
         } catch {
             // One line either way; the history file is as it was.
             let message = error.localizedDescription
@@ -2611,10 +2669,88 @@ final class BasaltAppModel: ObservableObject {
         }
     }
 
+    /// Names the game's log in the session log, as the excerpt's header
+    /// names it, unless another launch or a utility has taken the log over;
+    /// and notes the saved excerpt in the session's history record.
+    private func noteGameLog(_ run: GameLogRun, saved: (excerpt: GameLogExcerpt, file: URL?)?) {
+        defer {
+            pendingGameLogs[run.sessionID] = nil
+            if loggedSessionID == run.sessionID, wineShutdown == nil, !sessionState.isActive {
+                console.closeTranscript()
+            }
+        }
+        if loggedSessionID == run.sessionID {
+            appendLog(saved?.excerpt.sources.last.map { L10n.string(.modelGameLog, $0.path) }
+                ?? L10n.string(.modelGameLogNone))
+        }
+        // The session was recorded when it stopped; a history that has lost
+        // it since stays as it is.
+        guard let file = saved?.file,
+              let history = try? SessionHistoryStore(dataRoot: run.dataRoot).update(
+                run.sessionID, { $0.gameLog = file.lastPathComponent }),
+              history.contains(where: { $0.id == run.sessionID }), run.dataRoot == dataRoot else { return }
+        sessionHistory = history
+        Task { await refreshRecordings() }
+    }
+
+    private func captureGameLog(_ run: GameLogRun, wineMayBeRunning: Bool) {
+        guard pendingGameLogs[run.sessionID]?.claimed == false else { return }
+        pendingGameLogs[run.sessionID]?.claimed = true
+        let redactor = gameLogRedactor(for: run)
+        Task.detached { [weak self] in
+            let saved = run.save(redactedWith: redactor, wineMayBeRunning: wineMayBeRunning)
+            await self?.noteGameLog(run, saved: saved)
+        }
+    }
+
+    nonisolated private static let gameLogCaptureWaitLimit = Duration.seconds(5)
+
+    private func waitForGameLogCapture(_ sessionID: UUID?, upTo timeout: Duration = gameLogCaptureWaitLimit) async {
+        guard let sessionID else { return }
+        await SessionTeardown.wait(upTo: timeout) { pendingGameLogs[sessionID] == nil }
+    }
+
+    func waitForClaimedGameLogCaptures() async {
+        await SessionTeardown.wait(upTo: .seconds(3)) { !hasClaimedGameLogCapture }
+    }
+
+    /// The session's data folder is named as such in its game's excerpt.
+    private func gameLogRedactor(for run: GameLogRun) -> DiagnosticRedactor {
+        DiagnosticRedactor(dataFolder: run.dataRoot.path, appFolder: repoRoot.path)
+    }
+
+    /// The excerpt of the game's own log saved with a session; nil when it is gone.
+    func gameLogText(for record: SessionRecord) async -> String? {
+        guard let name = record.gameLog else { return nil }
+        let store = DiagnosticRecordingStore(dataRoot: dataRoot)
+        return await Task.detached { store.gameLogText(named: name) }.value
+    }
+
+    /// Where that excerpt is, for Show in Finder.
+    func gameLogFile(for record: SessionRecord) -> URL? {
+        record.gameLog.flatMap { DiagnosticRecordingStore(dataRoot: dataRoot).gameLogFile(named: $0) }
+    }
+
     /// A snapshot for bug reports. Callers render it through a
-    /// `DiagnosticRedactor`; nothing here leaves the Mac by itself.
-    func makeDiagnosticReport(includeLog: Bool) -> DiagnosticReport {
-        DiagnosticReport(
+    /// `DiagnosticRedactor`; nothing here leaves the Mac by itself. The
+    /// game's own log is read off the main thread: that of the running
+    /// game, else the excerpt saved with the latest session, which a session
+    /// that has just stopped is given first.
+    func makeDiagnosticReport(includeLog: Bool, includeGameLog: Bool) async -> DiagnosticReport {
+        let captureID = latestGameLogCaptureID
+        let waitStarted = ContinuousClock.now
+        await waitForGameLogCapture(captureID)
+        let waitRemaining = Self.gameLogCaptureWaitLimit - waitStarted.duration(to: .now)
+        var gameLog: DiagnosticReport.GameLog?
+        if includeGameLog {
+            gameLog = await readDiagnosticGameLog()
+            let latest = latestGameLogCaptureID
+            if latest != captureID {
+                await waitForGameLogCapture(latest, upTo: waitRemaining)
+                gameLog = await readDiagnosticGameLog()
+            }
+        }
+        return DiagnosticReport(
             application: .current(repoRoot: repoRoot),
             system: .current(),
             setupChecks: setupChecks,
@@ -2625,10 +2761,20 @@ final class BasaltAppModel: ObservableObject {
             profileStreamSettings: profileSettings,
             currentSession: .init(
                 state: sessionState.label,
-                profileName: openSession?.profileName,
-                metrics: openSession?.metrics),
+                profileName: openSession?.record.profileName,
+                metrics: openSession?.record.metrics),
             recentSessions: sessionHistory,
-            log: includeLog ? console.diagnosticLog : nil)
+            log: includeLog ? console.diagnosticLog : nil,
+            gameLog: gameLog)
+    }
+
+    private func readDiagnosticGameLog() async -> DiagnosticReport.GameLog {
+        let (running, history, root) = (runningGame, sessionHistory, dataRoot)
+        let redactor = DiagnosticRedactor(dataFolder: (running?.dataRoot ?? root).path, appFolder: repoRoot.path)
+        return await Task.detached {
+            DiagnosticReport.GameLog.current(
+                running: running, history: history, dataRoot: root, redactedWith: redactor)
+        }.value
     }
 
     func export(_ text: String, to url: URL) {
@@ -2661,8 +2807,8 @@ final class BasaltAppModel: ObservableObject {
             }
             if let metric = StreamLogMetricsParser.parse(line: line) {
                 console.record(metric)
-                if let target = openSession?.settings.fps {
-                    openSession?.metrics.add(metric, targetFPS: target)
+                if let target = openSession?.record.settings.fps {
+                    openSession?.record.metrics.add(metric, targetFPS: target)
                 }
             } else if let refusal = RuntimeConnectionRefusal.message(in: line) {
                 alertMessage = refusal

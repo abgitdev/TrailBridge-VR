@@ -69,6 +69,36 @@ final class SessionHistoryTests: XCTestCase {
         try store.clear()
     }
 
+    func testUpdateChangesOneRecordWhereItStands() throws {
+        let file = try temporaryDirectory().appendingPathComponent("history.json")
+        let store = SessionHistoryStore(file: file)
+        // Nothing to change in a history that is not there, and none is made.
+        XCTAssertEqual(try store.update(UUID()) { $0.outcome = .ended }, [])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: file.path))
+
+        let older = SessionRecord(profileName: "older", settings: StreamLaunchSettings(),
+                                  startedAt: Date(timeIntervalSince1970: 1_800_000_000))
+        let newer = SessionRecord(profileName: "newer", settings: StreamLaunchSettings(),
+                                  startedAt: Date(timeIntervalSince1970: 1_800_000_100))
+        try store.append(older)
+        try store.append(newer)
+
+        // The game log of the older session is saved after the newer one started.
+        let updated = try store.update(older.id) { $0.gameLog = "20270115T080000.000000Z-older.game.log" }
+        XCTAssertEqual(updated.map(\.profileName), ["newer", "older"])
+        XCTAssertEqual(store.load().last?.gameLog, "20270115T080000.000000Z-older.game.log")
+        XCTAssertNil(store.load().first?.gameLog)
+        // A session the history no longer has stays out of it.
+        XCTAssertEqual(try store.update(UUID()) { $0.gameLog = "x" }.map(\.profileName), ["newer", "older"])
+        XCTAssertEqual(store.load(), updated)
+
+        // Written by a newer app: left alone.
+        try Data(#"{"formatVersion": 99, "sessions": []}"#.utf8).write(to: file)
+        XCTAssertThrowsError(try store.update(older.id) { $0.outcome = .ended }) {
+            XCTAssertEqual($0 as? SessionHistoryStore.Failure, .newerFormat(99))
+        }
+    }
+
     func testStoreSkipsUnreadableRecordsAndToleratesCorruptFiles() throws {
         let file = try temporaryDirectory().appendingPathComponent("history.json")
         let store = SessionHistoryStore(file: file)

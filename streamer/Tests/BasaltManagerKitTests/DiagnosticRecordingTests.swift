@@ -260,6 +260,12 @@ final class DiagnosticRecordingTests: XCTestCase {
         XCTAssertEqual(DiagnosticRecordingStore.parse(fileName: stem + ".csv")?.stem, stem)
         XCTAssertEqual(DiagnosticRecordingStore.parse(fileName: stem + ".csv")?.kind, .frames)
         XCTAssertEqual(DiagnosticRecordingStore.parse(fileName: stem + ".console.log")?.kind, .sessionLog)
+        XCTAssertEqual(DiagnosticRecordingStore.parse(fileName: stem + ".game.log")?.kind, .gameLog)
+        XCTAssertEqual(DiagnosticRecordingStore.parse(fileName: stem + ".game.log")?.stem, stem)
+        // A profile may end in ".game" or ".console" itself.
+        XCTAssertEqual(DiagnosticRecordingStore.parse(fileName: stem + ".game.console.log")?.stem, stem + ".game")
+        XCTAssertEqual(DiagnosticRecordingStore.parse(fileName: stem + ".console.game.log")?.stem, stem + ".console")
+        XCTAssertNil(DiagnosticRecordingStore.parse(fileName: stem + ".log"))
         XCTAssertEqual(DiagnosticRecordingStore.parse(fileName: stem + ".hevc")?.kind, .video)
         XCTAssertEqual(DiagnosticRecordingStore.parse(fileName: stem + ".h264")?.kind, .video)
         XCTAssertEqual(DiagnosticRecordingStore.parse(fileName: stem + ".hevc.index.csv")?.kind, .videoIndex)

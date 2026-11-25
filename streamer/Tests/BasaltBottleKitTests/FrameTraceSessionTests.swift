@@ -98,6 +98,54 @@ final class FrameTraceSessionTests: XCTestCase {
         }
     }
 
+    func testTheGameLogTakesTheRecordingsNameOrOneOfItsOwn() throws {
+        let root = try temporaryDirectory()
+        let date = Date(timeIntervalSince1970: 1_735_689_600)
+        let excerpt = Data("==> C:\\users\\[user]\\Player.log <==\nline\n".utf8)
+        var env = ["BASALT_FRAME_TRACE": "1"]
+        let recording = try XCTUnwrap(FrameTraceSession.rewrite(
+            environment: &env, dataRoot: root, prefix: root.appendingPathComponent("prefix"),
+            profile: "game", now: date))
+
+        // A launch that records lends its name, so the excerpt is listed with it.
+        let saved = try XCTUnwrap(DiagnosticsStorage.saveGameLog(
+            excerpt, dataRoot: root, recording: recording, profile: "game", startedAt: Date()))
+        XCTAssertEqual(saved, recording.gameLog)
+        XCTAssertEqual(saved.lastPathComponent, "20250101T000000.000000Z-game.game.log")
+        XCTAssertEqual(try Data(contentsOf: saved), excerpt)
+        let mode = try FileManager.default.attributesOfItem(atPath: saved.path)[.posixPermissions] as? Int
+        XCTAssertEqual(mode, 0o600)
+        // An excerpt is never written over.
+        XCTAssertNil(DiagnosticsStorage.saveGameLog(
+            Data("other".utf8), dataRoot: root, recording: recording, profile: "game", startedAt: Date()))
+        XCTAssertEqual(try Data(contentsOf: saved), excerpt)
+
+        // Any other launch gets a name from its start, never one already in use.
+        let own = try XCTUnwrap(DiagnosticsStorage.saveGameLog(
+            excerpt, dataRoot: root, recording: nil, profile: "game", startedAt: date))
+        XCTAssertEqual(own.lastPathComponent, "20250101T000000.000001Z-game.game.log")
+        XCTAssertEqual(own.deletingLastPathComponent(), DiagnosticsStorage.directory(dataRoot: root))
+        let next = try XCTUnwrap(DiagnosticsStorage.saveGameLog(
+            excerpt, dataRoot: root, recording: nil, profile: "game", startedAt: date))
+        XCTAssertEqual(next.lastPathComponent, "20250101T000000.000002Z-game.game.log")
+
+        XCTAssertNil(DiagnosticsStorage.saveGameLog(
+            excerpt, dataRoot: root, recording: nil, profile: "../game", startedAt: date))
+        let missing = root.appendingPathComponent("missing")
+        XCTAssertNil(DiagnosticsStorage.saveGameLog(
+            excerpt, dataRoot: missing, recording: nil, profile: "game", startedAt: date))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: missing.path))
+
+        // Written whole under another name and renamed: nothing else is left,
+        // not even after a save that found its name taken.
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(
+            atPath: DiagnosticsStorage.directory(dataRoot: root).path).sorted(), [
+                "20250101T000000.000000Z-game.console.log", "20250101T000000.000000Z-game.csv",
+                "20250101T000000.000000Z-game.game.log", "20250101T000000.000001Z-game.game.log",
+                "20250101T000000.000002Z-game.game.log",
+            ])
+    }
+
     func testStorageNeverCreatesTheDataRootAndOnlyCreatesTheFolderOnRequest() throws {
         let root = try temporaryDirectory()
         let missing = root.appendingPathComponent("missing")

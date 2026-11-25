@@ -19,6 +19,16 @@ All notable changes to TrailBridge VR are documented here.
 - The session log shows the first occurrence of each known harmless GStreamer warning and totals
   its repeats when the output closes. Diagnostic reports include repeat counts during a session,
   and recordings keep the full output and final counts.
+- Each session keeps an excerpt of the game's own log, where the reason for a black headset often
+  is: Electrician Simulator VR ran and sent frames while only its `Player.log` said that it could
+  not decode its video. When the session ends, TrailBridge reads a Unity player's `Player.log`
+  (`output_log.txt` in older versions) or an Unreal game's `Saved/Logs` and keeps the last 200
+  lines and every line that reports an error, with personal data replaced. If Wine could not be
+  stopped, the excerpt is still kept and marked as possibly incomplete. The excerpt opens from the
+  session in Recent Sessions, is listed on the Diagnostics page and can be included in the
+  diagnostic report; it stays on the Mac.
+- Diagnostic redaction covers more Steam ID formats, hides full names in account fields and shows
+  a game folder outside the Wine C: drive as `[game folder]`.
 
 ## 0.2.1 — 2026-11-15
 

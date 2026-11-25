@@ -70,6 +70,8 @@ public enum L10nKey: String, CaseIterable, Sendable {
     case modelGamePriority
     case modelGameExited
     case modelGameExitedQuickly
+    case modelGameLog
+    case modelGameLogNone
     case modelSteamDirectLaunch
     case modelGameBroughtForward
     case modelGameBringForwardFailed
@@ -339,6 +341,10 @@ public enum L10nKey: String, CaseIterable, Sendable {
     case streamReplay
     case streamReplayHelp
     case streamCannotReplay
+    case streamGameLog
+    case streamGameLogHelp
+    case streamGameLogNote
+    case streamGameLogMissing
     case streamUnknownError
     case streamHistoryFPS
     case streamHistoryLatency
@@ -789,6 +795,7 @@ public enum L10nKey: String, CaseIterable, Sendable {
     case diagnosticsTitle
     case diagnosticsSubtitle
     case diagnosticsIncludeLog
+    case diagnosticsIncludeGameLog
     case diagnosticsRedaction
     case diagnosticsBugForm
     case diagnosticsBugFormHelp
@@ -853,6 +860,9 @@ public enum L10nKey: String, CaseIterable, Sendable {
     case recordingVideoFor
     case recordingList
     case recordingListEmpty
+    case recordingGameLogNote
+    case recordingGameLogFolder
+    case recordingGameLogPossiblyIncomplete
     case recordingFolder
     case recordingTotal
     case recordingDeleteAll
@@ -866,6 +876,7 @@ public enum L10nKey: String, CaseIterable, Sendable {
     case recordingInProgress
     case recordingFileFrames
     case recordingFileLog
+    case recordingFileGameLog
     case recordingFileVideo
     case recordingFileVideoIndex
     case recordingFileSize

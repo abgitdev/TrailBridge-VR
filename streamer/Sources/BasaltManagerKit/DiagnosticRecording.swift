@@ -72,10 +72,11 @@ public struct DiagnosticRecordingPlan: Equatable, Sendable {
 }
 
 /// One recorded launch: the files in the `Diagnostics` folder that share a
-/// `<UTC time>-<profile>` name.
+/// `<UTC time>-<profile>` name. A launch that recorded nothing has only the
+/// excerpt of the game's own log, which the app saves after every session.
 public struct DiagnosticRecording: Identifiable, Equatable, Sendable {
     public enum FileKind: String, CaseIterable, Sendable {
-        case frames, sessionLog, video, videoIndex
+        case frames, sessionLog, gameLog, video, videoIndex
     }
 
     public struct File: Identifiable, Equatable, Sendable {
@@ -133,22 +134,64 @@ public struct DiagnosticRecordingStore: Sendable {
 
     /// Removes every file of one recording, including any written since it was listed.
     public func delete(_ recording: DiagnosticRecording) throws {
-        _ = try remove { $0 == recording.id }
+        _ = try remove { stem, _ in stem == recording.id }
     }
 
     /// Removes every recording except `keeping` (a session still being
     /// written) and returns how many files went. Other files stay.
     @discardableResult
     public func deleteAll(keeping: Set<String> = []) throws -> Int {
-        try remove { !keeping.contains($0) }
+        try remove { stem, _ in !keeping.contains(stem) }
     }
 
-    private func remove(where matches: (String) -> Bool) throws -> Int {
+    /// The largest saved game log `gameLogText(named:)` reads: many times
+    /// the size of an excerpt.
+    static let maximumGameLogBytes = 1 << 20
+
+    /// Where a saved excerpt of a game's own log is, by file name; nil when
+    /// the name is not that of one in this folder.
+    public func gameLogFile(named name: String) -> URL? {
+        guard !name.contains("/"), let parsed = Self.parse(fileName: name), parsed.kind == .gameLog,
+              Self.parse(stem: parsed.stem) != nil else { return nil }
+        return directory.appendingPathComponent(name)
+    }
+
+    /// A saved excerpt of a game's own log, by file name; nil when it is
+    /// gone or the name is not that of one in this folder.
+    public func gameLogText(named name: String) -> String? {
+        guard gameLogFile(named: name) != nil else { return nil }
+        let folder = DiagnosticsStorage.open(dataRoot: dataRoot, create: false)
+        guard folder >= 0 else { return nil }
+        defer { close(folder) }
+        let fd = openat(folder, name, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
+        guard fd >= 0 else { return nil }
+        let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+        var info = stat()
+        guard fstat(fd, &info) == 0, info.st_mode & S_IFMT == S_IFREG,
+              info.st_size <= Self.maximumGameLogBytes,
+              let data = try? handle.read(upToCount: Self.maximumGameLogBytes + 1) ?? Data(),
+              data.count <= Self.maximumGameLogBytes else { return nil }
+        return String(decoding: data, as: UTF8.self)
+    }
+
+    /// Removes the oldest excerpts of a game's own log that are all a
+    /// launch left, keeping the newest `limit`, and returns how many went.
+    /// The app saves one after every session; recordings the person turned
+    /// on keep theirs until they are deleted.
+    @discardableResult
+    public func removeGameLogs(keeping limit: Int) throws -> Int {
+        let old = Set(list().filter { $0.files.allSatisfy { $0.kind == .gameLog } }
+            .dropFirst(max(0, limit)).map(\.id))
+        guard !old.isEmpty else { return 0 }
+        return try remove { stem, kind in kind == .gameLog && old.contains(stem) }
+    }
+
+    private func remove(where matches: (_ stem: String, _ kind: DiagnosticRecording.FileKind) -> Bool) throws -> Int {
         let fd = DiagnosticsStorage.open(dataRoot: dataRoot, create: false)
         guard fd >= 0 else { return 0 }
         defer { close(fd) }
         var removed = 0
-        for entry in Self.recordingFiles(in: fd) where matches(entry.stem) {
+        for entry in Self.recordingFiles(in: fd) where matches(entry.stem, entry.kind) {
             if unlinkat(fd, entry.name, 0) == 0 {
                 removed += 1
             } else if errno != ENOENT {
@@ -199,7 +242,7 @@ public struct DiagnosticRecordingStore: Sendable {
         let codecs = VideoCodec.allCases.map(\.rawValue)
         let endings: [(String, DiagnosticRecording.FileKind)] =
             codecs.map { (".\($0).index.csv", .videoIndex) }
-            + [(".console.log", .sessionLog), (".csv", .frames)]
+            + [(".console.log", .sessionLog), (".game.log", .gameLog), (".csv", .frames)]
             + codecs.map { (".\($0)", .video) }
         for (ending, kind) in endings where fileName.hasSuffix(ending) {
             let stem = String(fileName.dropLast(ending.count))

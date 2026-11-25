@@ -86,15 +86,36 @@ shows the session state with a Stop button.
    duration, outcome (ended, stopped, or the failure reason), and whole-session FPS, latency, and
    wire-rate averages, including how often the headset ran below its target. The last 50 sessions
    are kept in `SessionHistory.json` in the data folder; a finished game can be replayed from its row.
+   Once a session has stopped, however it ended, and its Wine processes are gone, the app reads
+   the log the game wrote itself, which often says why a game that runs shows nothing in the
+   headset. A Unity player writes `Player.log` (and `Player-prev.log` for a run before it in the
+   same session) in `AppData/LocalLow/<company>/<product>` of the prefix's Windows user, as named
+   in `<Game>_Data/app.info` (for a launcher, in the only other `*_Data/app.info` beside it); Unity
+   2017.2 to 2018 wrote `output_log.txt` there, older versions `output_log.txt` in `<Game>_Data`.
+   An Unreal game writes `<Project>/Saved/Logs/*.log` in `AppData/Local`, or else in the game's
+   folder. Only regular files inside the prefix or the game's folder that were written since the
+   game started count; a binary file is skipped, UTF-16 with a byte order mark is read as such,
+   and of a log larger than 8 MB only the end is read. The excerpt keeps the last 200 lines and
+   every line that reports an error, in their order, with personal data replaced in whole lines as
+   in a copied log; a line is then cut after 1,000 bytes, and one over 16 KB is left out for a
+   note. All of it, headers and notes included, fits in 64 KB, so a long log loses some of the
+   last lines or of the errors too; notes say where lines were left out. It is saved as
+   `<UTC time>-<profile>.game.log` in the data folder's `Diagnostics` folder, beside the session's
+   recording when there is one; of the others the latest 50 are kept. The session log names the
+   game's log as the game does (`C:\users\[user]\…`), the session's row in Recent Sessions shows
+   the excerpt, and the next launch and a diagnostic report wait until it is saved.
 8. **Settings** persists global stream defaults and per-profile overrides, selects audio and
    USB/Wi-Fi transport, and allows the managed Basalt data directory to be changed from the UI.
 9. **Diagnostic Report** (Settings, or **Help › Diagnostic Report…**) previews a bug-report
    snapshot: app version, commit, and control protocol; Mac model, macOS, and power state; setup
    checks; engines, bottles, and profiles; stream settings; the current and recent sessions; and,
-   optionally, the end of the session log. It can be copied as Markdown for a GitHub issue or saved
-   as Markdown or JSON. The home folder and user name, email addresses, Steam IDs, headset serials
-   and host names, Mac host names, IP and MAC addresses, and long hex tokens are replaced before
-   anything is shown, and profile environment values are never included. Nothing is uploaded.
+   optionally, the end of the session log and the excerpt of the game's own log: read anew from
+   the running game, else the one saved with the latest session. It can be copied as Markdown for
+   a GitHub issue or saved as Markdown or JSON. The home folder and user name (also in Wine's
+   `C:/users/<name>` and `Z:\Users\<name>` paths and an Unreal log's `LogInit: User:` line), email
+   addresses, Steam IDs, headset serials and host names, Mac host names, IP and MAC addresses, and
+   long hex tokens are replaced before anything is shown, and profile environment values are never
+   included. Nothing is uploaded.
 
 OpenComposite is a separate GPL-3.0 project by its authors, never bundled with TrailBridge.
 Library → More → OpenVR Support… (also in Edit Launch Profile…) finds game DLLs inside the
@@ -125,6 +146,8 @@ swift test --package-path streamer
 default/configured/explicit-location and managed-bottle launcher/instance discovery, Windows/host
 path mapping, Beat Saber scanning and source inference, duplicate resolution, stream argument
 generation, live-stat parsing, session history persistence and summaries, stream-health rules,
-metric CSV export, diagnostic redaction, and report rendering. `BasaltBottleKitTests` verifies repository/support-root
+metric CSV export, diagnostic redaction, report rendering, and the game log excerpt, its storage
+and its place in the report. `BasaltBottleKitTests` verifies repository/support-root
 discovery, maintenance and VR launch commands, the BSManager Steam prerequisite, profile deletion,
-and a real isolated import whose source remains unchanged.
+where Unity and Unreal games write their logs inside a prefix, and a real isolated import whose
+source remains unchanged.

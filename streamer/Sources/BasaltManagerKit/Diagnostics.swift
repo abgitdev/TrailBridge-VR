@@ -39,13 +39,16 @@ public struct DiagnosticRedactor: Sendable {
 
     /// Plain text: a log, or one value of a report before it is rendered.
     public func redact(_ text: String) -> String {
-        redactIdentifiers(in: Self.redactStreamerLines(in: text))
+        // Copy and Save can also receive a log that is itself JSON.
+        let first = text.first { !$0.isWhitespace }
+        let isJSON = (first == "\"" || first == "[" || first == "{")
+            && (try? JSONSerialization.jsonObject(with: Data(text.utf8), options: .fragmentsAllowed)) != nil
+        return redactIdentifiers(in: Self.redactStreamerLines(in: text), preservingJSON: isJSON)
     }
 
-    /// Every rule except the streamer's own lines. Replacements contain no
-    /// quotes or backslashes, and any quote a rule matches is put back, so
-    /// redacting rendered JSON keeps it valid.
-    func redactIdentifiers(in text: String) -> String {
+    /// Every rule except the streamer's own lines. When redacting rendered
+    /// JSON, keep the enclosing string delimiters and escaped line breaks.
+    func redactIdentifiers(in text: String, preservingJSON: Bool = false) -> String {
         var value = text
         for (expression, placeholder) in folderRules() {
             value = Self.replace(expression, in: value, with: placeholder)
@@ -83,7 +86,8 @@ public struct DiagnosticRedactor: Sendable {
         value = Self.replaceMatches(Self.uuidOrSerial, in: value) { match in
             match.contains("-") || Self.isTimeStamp(match) ? nil : "[serial]"
         }
-        value = Self.replace(Self.account, in: value, with: "$1$2$3[redacted]$4")
+        value = Self.replace(preservingJSON ? Self.jsonAccount : Self.account,
+                             in: value, with: "$1$2$3$4$5[redacted]$5")
         return value
     }
 
@@ -91,7 +95,8 @@ public struct DiagnosticRedactor: Sendable {
 
     /// Lines of basalt-streamer that print a name with no diagnostic use: a
     /// CoreAudio device ("Ada's AirPods"), the headset's own name, a USB
-    /// serial of any shape. Such a name can hold any character and may run
+    /// serial of any shape; and the Windows user and computer an Unreal
+    /// game's log names. Such a name can hold any character and may run
     /// to the end of its line, so these rules read plain log lines only,
     /// never rendered JSON or a Markdown table.
     static func redactStreamerLines(in text: String) -> String {
@@ -106,6 +111,8 @@ public struct DiagnosticRedactor: Sendable {
             }
         }
         value = replace(headsetNameLine, in: value, with: "$1[headset]$2")
+        value = replace(unrealUserLine, in: value, with: "$1[user]")
+        value = replace(unrealComputerLine, in: value, with: "$1[host]")
         return replace(usbSerialLine, in: value, with: "$1[serial]$2")
     }
 
@@ -141,6 +148,11 @@ public struct DiagnosticRedactor: Sendable {
         #"(ALVR control accepted by ').*(': StreamConfig sent)"#)
 
     private static let usbSerialLine = regex(#"(USB Quest )\S+( is authorized)"#)
+
+    /// Unreal names them as Wine reports them, which takes both from the
+    /// Mac: the rest of the line is the name, quoted or not.
+    private static let unrealUserLine = regex(#"(?m)(LogInit: User: ).*$"#)
+    private static let unrealComputerLine = regex(#"(?m)(LogInit: Computer: ).*$"#)
 
     // MARK: Folders, disks and this Mac's names
 
@@ -188,13 +200,22 @@ public struct DiagnosticRedactor: Sendable {
                 + Self.nameEnd, placeholder))
         }
         if homeDirectory.count > 1 {
-            rules.append((homeDirectory.count, homeDirectory
+            // Wine's `Z:/Users/ada` is left to the user rule, as `Z:\Users\ada` is.
+            rules.append((homeDirectory.count, "(?<![A-Za-z]:)" + homeDirectory
                 .split(separator: "/", omittingEmptySubsequences: false)
                 .map { Self.spellings(of: String($0)) }.joined(separator: "/") + Self.nameEnd, "~"))
         }
         return rules.sorted { $0.length > $1.length }.compactMap { rule in
             (try? NSRegularExpression(pattern: rule.pattern)).map { ($0, rule.placeholder) }
         }
+    }
+
+    /// Matches the game root before other path rules can change parts of it.
+    static func gameFolderRule(for path: String) -> NSRegularExpression? {
+        let names = path.split(separator: "/")
+        guard !names.isEmpty else { return nil }
+        return try? NSRegularExpression(pattern: "(?i)" + nameStart + #"(?:Z:)?[/\\]+"#
+            + names.map { spellings(of: String($0)) }.joined(separator: #"[/\\]+"#) + nameEnd)
     }
 
     /// `/Volumes/<name>` keeps the rest of the path. Connected disks and
@@ -233,7 +254,11 @@ public struct DiagnosticRedactor: Sendable {
             + #"(?:(?:[^/\\\r\n"';,:=()<>|]|'(?=\p{L}))+?(?<!\s)(?=[/\\])"#
             + #"|(?:[^/\\\s"';,:=()<>|]|'(?=\p{L}))+)"#)
 
-    private static let anyUser = regex(#"(?i)([/\\]users[/\\]+)([^/\\\s"'<>|:*?,;()\[\]{}]+)"#)
+    /// The whole folder name after `users`, up to the next separator: a
+    /// Windows user's may hold spaces, apostrophes and brackets ("Jane Doe").
+    /// Only what no Windows name holds ends it early, a quote among them,
+    /// so that rendered JSON stays valid; a space before the end is kept.
+    private static let anyUser = regex(#"(?i)([/\\]users[/\\]+)([^/\\"<>|:*?\r\n\t]*[^/\\"<>|:*?\s])"#)
 
     /// The per-user temporary and cache root, `/var/folders/xx/<28 characters>`,
     /// is the same for a user on every start.
@@ -283,7 +308,8 @@ public struct DiagnosticRedactor: Sendable {
     /// mistaken for (or hide) an address.
     private static let fixedRules: [(NSRegularExpression, String)] = [
         (regex(#"(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b"#), "[email]"),
-        (regex(#"\b7656119\d{10}\b"#), "[steamid]"),
+        (regex(#"(?<![0-9])(?:7656119[0-9]{10}|765612[0-9]{11})(?![0-9])"#), "[steamid]"),
+        (regex(#"(?i)\bSTEAM_[0-5]:[01]:[0-9]+\b"#), "[steamid]"),
         (regex(#"\[U:\d:\d+\]"#), "[steamid]"),
         // Steam keeps each account's files in userdata/<account ID>.
         (regex(#"(?i)(userdata[/\\]+)\d+"#), "$1[steamid]"),
@@ -320,13 +346,22 @@ public struct DiagnosticRedactor: Sendable {
             && parts.allSatisfy { $0.allSatisfy(\.isASCII) && $0.allSatisfy(\.isNumber) }
     }
 
-    /// The value's quotes, plain or JSON-escaped, are captured and put back:
-    /// a closing quote can also end the enclosing JSON string. Values stop at
-    /// a lone backslash so JSON escapes such as `\n` stay intact.
-    private static let account = regex(
-        #"(?i)\b(account(?:_?name)?|user_?name|login|persona(?:_?name)?|steam_?id(?:64)?|serial(?:_?number)?|computer_?name|host_?name)(\s*[:=]\s*)((?:\\?")?)(?:[^\s"',;\\]|\\\\)+((?:\\?")?)"#)
+    private static let accountField =
+        #"(?i)\b(account(?:[ _]?name)?|user[ _]?name|login|persona(?:[ _]?name)?|steam[ _]?id(?:64)?|serial(?:[ _]?number)?|computer[ _]?name|host[ _]?name)"#
 
-    private static func replace(
+    /// Identity fields take the rest of their line. For assignments, keep
+    /// explicit value quotes or the next variable in an environment dump.
+    private static let account = regex(accountField
+        + #"([ \t]*)(?:(:[ \t]*)[^\r\n]+|(=[ \t]*)(?:(")(?:\\.|[^"\\\r\n])*""#
+        + #"|(?:(?![ \t]+(?-i:[A-Z_][A-Z_0-9]*)=)[^\r\n])+))"#)
+
+    /// Keep the enclosing string delimiters and escaped line breaks in JSON.
+    private static let jsonAccountValue = #"(?:(?!\\[nr])(?:\\[\\"]|[^"\\\r\n]|\\(?!")))+"#
+    private static let jsonAccount = regex(accountField
+        + #"([ \t]*)(?:(:[ \t]*)"# + jsonAccountValue
+        + #"|(=[ \t]*)(?:(\\")(?:(?!\5|\\[nr])[^\r\n])*\5|"# + jsonAccountValue + "))")
+
+    static func replace(
         _ expression: NSRegularExpression, in text: String, with template: String
     ) -> String {
         expression.stringByReplacingMatches(
@@ -366,8 +401,9 @@ extension SessionConsole {
 }
 
 /// A structured snapshot of the Mac, setup, bottles, profiles, stream
-/// settings, and recent sessions for bug reports. Build it from live state,
-/// then render it with a redactor; the unredacted renderings stay internal.
+/// settings, recent sessions, and the session's and the game's own logs for
+/// bug reports. Build it from live state, then render it with a redactor;
+/// the unredacted renderings stay internal.
 public struct DiagnosticReport: Codable, Equatable, Sendable {
     public static let currentFormatVersion = 1
     public static let maximumLogLines = 300
@@ -501,6 +537,22 @@ public struct DiagnosticReport: Codable, Equatable, Sendable {
         }
     }
 
+    /// An excerpt of the game's own log (`GameLogExcerpt`), its personal
+    /// data already replaced.
+    public struct GameLog: Codable, Equatable, Sendable {
+        /// The game profile it comes from; nil when no game has run.
+        public var profileName: String?
+        /// Empty when no log of the game was found.
+        public var lines: [String]
+
+        public init(profileName: String?, excerpt: String?) {
+            self.profileName = profileName
+            var lines = excerpt?.components(separatedBy: "\n") ?? []
+            if lines.last?.isEmpty == true { lines.removeLast() }
+            self.lines = lines
+        }
+    }
+
     public var formatVersion: Int
     public var generatedAt: Date
     public var application: Application
@@ -515,6 +567,8 @@ public struct DiagnosticReport: Codable, Equatable, Sendable {
     public var recentSessions: [SessionRecord]
     /// The end of the session log, or nil when the user left it out.
     public var logTail: [String]?
+    /// The game's own log, or nil when the user left it out.
+    public var gameLog: GameLog?
 
     public init(
         generatedAt: Date = Date(),
@@ -528,7 +582,8 @@ public struct DiagnosticReport: Codable, Equatable, Sendable {
         profileStreamSettings: [String: StreamLaunchSettings],
         currentSession: Session,
         recentSessions: [SessionRecord],
-        log: String?
+        log: String?,
+        gameLog: GameLog? = nil
     ) {
         formatVersion = Self.currentFormatVersion
         self.generatedAt = generatedAt
@@ -577,6 +632,10 @@ public struct DiagnosticReport: Codable, Equatable, Sendable {
                     $1.isEmpty ? $0 : $0.replacingOccurrences(of: $1, with: Self.audioCategory($1))
                 }))
         }
+        self.gameLog = gameLog.map {
+            GameLog(profileName: $0.profileName,
+                    excerpt: DiagnosticRedactor.redactStreamerLines(in: $0.lines.joined(separator: "\n")))
+        }
     }
 
     /// A launch argument may be an account name or a password
@@ -609,7 +668,7 @@ public struct DiagnosticReport: Codable, Equatable, Sendable {
 
     /// Pretty-printed JSON with every string passed through `redactor`.
     public func json(redactedWith redactor: DiagnosticRedactor) throws -> String {
-        redactor.redactIdentifiers(in: try renderJSON())
+        redactor.redactIdentifiers(in: try renderJSON(), preservingJSON: true)
     }
 
     /// GitHub-flavored Markdown, ready to paste into an issue, with every
@@ -724,6 +783,18 @@ public struct DiagnosticReport: Codable, Equatable, Sendable {
             lines += [fence, "", "</details>"]
         } else {
             lines.append(logTail == nil ? "Not included." : "Empty.")
+        }
+
+        lines += ["", "### Game log", ""]
+        if let gameLog, !gameLog.lines.isEmpty {
+            let fence = Self.fence(for: gameLog.lines)
+            let source = gameLog.profileName.map { " from \($0)" } ?? ""
+            lines += ["<details><summary>Excerpt\(source): \(gameLog.lines.count) lines</summary>", "",
+                      fence + "text"]
+            lines += gameLog.lines
+            lines += [fence, "", "</details>"]
+        } else {
+            lines.append(gameLog == nil ? "Not included." : "No log of the game was found.")
         }
         return lines.joined(separator: "\n") + "\n"
     }

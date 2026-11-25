@@ -342,6 +342,20 @@ public enum LeftoverSession {
 }
 
 public enum SessionTeardown {
+    /// Gives a pending operation time to finish while the main actor can
+    /// still publish its result.
+    @MainActor
+    public static func wait(upTo timeout: Duration, until done: () -> Bool) async {
+        let clock = ContinuousClock()
+        let deadline = clock.now + timeout
+        while !done() {
+            let now = clock.now
+            guard now < deadline else { return }
+            do { try await clock.sleep(until: min(deadline, now + .milliseconds(20))) }
+            catch { return }
+        }
+    }
+
     /// Blocks until `done` answers true or `seconds` have passed; returns the
     /// last answer. For quitting, where the app waits for the streamer to
     /// restore the Mac's audio output, but never for long.

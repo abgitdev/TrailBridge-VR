@@ -67,6 +67,9 @@ public struct FrameTraceSession: Equatable, Sendable {
     /// The streamer writes `video(codecExtension:)` and creates it itself.
     public let recordsVideo: Bool
     public var console: URL { csv.deletingPathExtension().appendingPathExtension("console.log") }
+    /// The excerpt of the game's own log, which the app saves once the game
+    /// has ended (`DiagnosticsStorage.saveGameLog`).
+    public var gameLog: URL { csv.deletingPathExtension().appendingPathExtension("game.log") }
     /// Raw encoded stream, named after its codec so tools can read it directly.
     public func video(codecExtension: String) -> URL {
         csv.deletingPathExtension().appendingPathExtension(codecExtension)
@@ -96,16 +99,8 @@ public struct FrameTraceSession: Equatable, Sendable {
         let fd = DiagnosticsStorage.open(dataRoot: dataRoot, create: true)
         guard fd >= 0 else { return nil }
         defer { close(fd) }
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = TimeZone(secondsFromGMT: 0)
-        formatter.dateFormat = "yyyyMMdd'T'HHmmss"
         // O_EXCL protects even two launches within the clock's resolution.
-        for attempt in 0..<100 {
-            let micros = Int64((now.timeIntervalSince1970 * 1_000_000).rounded()) + Int64(attempt)
-            let seconds = Date(timeIntervalSince1970: Double(micros / 1_000_000))
-            let stamp = formatter.string(from: seconds) + String(format: ".%06lldZ", micros % 1_000_000)
-            let stem = "\(stamp)-\(profile)"
+        for stem in names(profile: profile, at: now) {
             let csvName = stem + ".csv", consoleName = stem + ".console.log"
             if traces {
                 let csvFD = openat(fd, csvName, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
@@ -128,9 +123,79 @@ public struct FrameTraceSession: Equatable, Sendable {
         return nil
     }
 
+    /// The names a launch at `date` may take, `<UTC time>-<profile>`, each a
+    /// microsecond after the one before; the first is nearly always free.
+    static func names(profile: String, at date: Date) -> some Sequence<String> {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "yyyyMMdd'T'HHmmss"
+        let start = Int64((date.timeIntervalSince1970 * 1_000_000).rounded())
+        return (0..<100).lazy.map { attempt in
+            let micros = start + Int64(attempt)
+            let seconds = Date(timeIntervalSince1970: Double(micros / 1_000_000))
+            let stamp = formatter.string(from: seconds) + String(format: ".%06lldZ", micros % 1_000_000)
+            return "\(stamp)-\(profile)"
+        }
+    }
+
     /// Any entry, including a dangling symlink, or an unreadable directory.
-    private static func isTaken(_ name: String, in directory: Int32) -> Bool {
+    fileprivate static func isTaken(_ name: String, in directory: Int32) -> Bool {
         var info = stat()
         return fstatat(directory, name, &info, AT_SYMLINK_NOFOLLOW) == 0 || errno != ENOENT
+    }
+}
+
+extension DiagnosticsStorage {
+    /// Saves the excerpt of a game's own log as `<name>.game.log`, private to
+    /// the user. A launch that recorded something lends its name, so the
+    /// excerpt is listed with its other files; any other launch gets a new
+    /// `<UTC time>-<profile>` name from `startedAt`, as `FrameTraceSession`
+    /// would have given it. Never replaces a file; nil when nothing was saved.
+    public static func saveGameLog(_ contents: Data, dataRoot: URL, recording: FrameTraceSession?,
+                                   profile: String, startedAt: Date) -> URL? {
+        guard (try? BottleName.validate(profile, kind: "profile name")) != nil else { return nil }
+        let fd = open(dataRoot: dataRoot, create: true)
+        guard fd >= 0 else { return nil }
+        defer { close(fd) }
+        // Written whole under a hidden name first, so that the list of
+        // recordings and the session history never meet half an excerpt.
+        let temporary = ".game-log-\(UUID().uuidString).tmp"
+        let file = openat(fd, temporary, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
+        guard file >= 0 else { return nil }
+        let written = write(contents, to: file)
+        close(file)
+        defer { unlinkat(fd, temporary, 0) }
+        guard written else { return nil }
+        let stems: AnySequence<String> = recording.map {
+            AnySequence([$0.csv.deletingPathExtension().lastPathComponent])
+        } ?? AnySequence(FrameTraceSession.names(profile: profile, at: startedAt))
+        for stem in stems {
+            // A new name never joins the files of another launch.
+            if recording == nil, FrameTraceSession.isTaken(stem + ".csv", in: fd)
+                || FrameTraceSession.isTaken(stem + ".console.log", in: fd) {
+                continue
+            }
+            let name = stem + ".game.log"
+            if renameatx_np(fd, temporary, fd, name, UInt32(RENAME_EXCL)) == 0 {
+                return directory(dataRoot: dataRoot).appendingPathComponent(name)
+            }
+            guard errno == EEXIST else { return nil }
+        }
+        return nil
+    }
+
+    /// Writes all of `data`, again after a signal interrupts it.
+    private static func write(_ data: Data, to fd: Int32) -> Bool {
+        data.withUnsafeBytes { bytes in
+            var offset = 0
+            while offset < bytes.count {
+                let count = Darwin.write(fd, bytes.baseAddress! + offset, bytes.count - offset)
+                if count < 0 && errno == EINTR { continue }
+                guard count > 0 else { return false }
+                offset += count
+            }
+            return true
+        }
     }
 }

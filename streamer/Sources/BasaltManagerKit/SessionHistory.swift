@@ -87,6 +87,10 @@ public struct SessionRecord: Codable, Equatable, Identifiable, Sendable {
     public var outcome: Outcome?
     public var failureReason: String?
     public var metrics: StreamMetricSummary
+    /// The excerpt of the game's own log saved for this session: a file name
+    /// in the data folder's `Diagnostics` folder, set once the game has
+    /// ended; nil when none was saved.
+    public var gameLog: String?
 
     public init(id: UUID = UUID(), profileName: String,
                 settings: StreamLaunchSettings, startedAt: Date = Date()) {
@@ -175,6 +179,24 @@ public struct SessionHistoryStore: Sendable {
     public func save(_ records: [SessionRecord],
                      setAside: (URL) -> Void = { _ in }) throws -> [SessionRecord] {
         _ = try recordsToKeep(setAside: setAside)
+        return try write(records)
+    }
+
+    /// Changes the saved record with `id` where it stands and returns the
+    /// saved history. A history without that record, a missing or damaged
+    /// file included, is left as it is; one of a newer format throws, as in
+    /// `append`.
+    @discardableResult
+    public func update(_ id: UUID, _ change: (inout SessionRecord) -> Void) throws -> [SessionRecord] {
+        guard case .document(let document) = try contents() else { return [] }
+        guard document.formatVersion <= Document.currentFormatVersion else {
+            throw Failure.newerFormat(document.formatVersion)
+        }
+        var records = document.sessions.compactMap(\.value)
+        guard let index = records.firstIndex(where: { $0.id == id }) else {
+            return Array(records.prefix(limit))
+        }
+        change(&records[index])
         return try write(records)
     }
 

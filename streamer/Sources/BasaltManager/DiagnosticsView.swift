@@ -30,6 +30,7 @@ struct DiagnosticsView: View {
             Button(L(.recordingDeleteAll), role: .destructive) {
                 Task { await model.deleteAllRecordings() }
             }
+            .disabled(model.gameLogCapturePending)
         } message: {
             Text(L(.recordingDeleteAllDetail,
                    RecordingFormat.size(finished.reduce(0) { $0 + $1.totalBytes })))
@@ -42,6 +43,7 @@ struct DiagnosticsView: View {
             Button(L(.recordingDelete), role: .destructive) {
                 Task { await model.deleteRecording(recording) }
             }
+            .disabled(model.gameLogCapturePending)
         } message: { recording in
             Text(L(.recordingDeleteDetail, model.gameTitle(forProfile: recording.profileName),
                    RecordingFormat.date(recording.startedAt), RecordingFormat.size(recording.totalBytes)))
@@ -92,7 +94,7 @@ struct DiagnosticsView: View {
             SectionTitle(title: L(.recordingList), count: model.recordings.count) {
                 Button(L(.recordingDeleteAll)) { confirmingDeleteAll = true }
                     .buttonStyle(TBQuietButtonStyle(compact: true))
-                    .disabled(finished.isEmpty)
+                    .disabled(finished.isEmpty || model.gameLogCapturePending)
             }
             HStack(spacing: 10) {
                 VStack(alignment: .leading, spacing: 2) {
@@ -113,6 +115,10 @@ struct DiagnosticsView: View {
                 .buttonStyle(TBIconButtonStyle(accessibilityLabel: L(.libraryShowInFinder), compact: true))
                 .help(L(.libraryShowInFinder))
             }
+            // Saved without a recording being turned on, so the list says why they are there.
+            Text(L(.recordingGameLogNote, Int64(GameLogExcerpt.keptExcerpts)))
+                .font(TB.Typography.meta).foregroundStyle(TB.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
             if model.recordings.isEmpty {
                 Text(L(.recordingListEmpty)).foregroundStyle(TB.textSecondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -126,6 +132,7 @@ struct DiagnosticsView: View {
                             title: model.gameTitle(forProfile: recording.profileName),
                             summary: model.recordingSummaries[recording.id],
                             inProgress: model.isRecordingInProgress(recording),
+                            deleteDisabled: model.gameLogCapturePending,
                             delete: { deleting = recording })
                     }
                 }
@@ -203,6 +210,7 @@ private struct RecordingRow: View {
     let title: String
     let summary: RecordingSummaryState?
     let inProgress: Bool
+    let deleteDisabled: Bool
     let delete: () -> Void
 
     private var date: String { RecordingFormat.date(recording.startedAt) }
@@ -237,7 +245,7 @@ private struct RecordingRow: View {
                 .accessibilityLabel(L(.recordingShowLabel, title, date))
                 Button(L(.recordingDelete), role: .destructive, action: delete)
                     .accessibilityLabel(L(.recordingDeleteLabel, title, date))
-                    .disabled(inProgress)
+                    .disabled(inProgress || deleteDisabled)
             }
             .buttonStyle(TBQuietButtonStyle(compact: true))
         }
@@ -304,6 +312,7 @@ private enum RecordingFormat {
         switch kind {
         case .frames: L(.recordingFileFrames)
         case .sessionLog: L(.recordingFileLog)
+        case .gameLog: L(.recordingFileGameLog)
         case .video: L(.recordingFileVideo)
         case .videoIndex: L(.recordingFileVideoIndex)
         }

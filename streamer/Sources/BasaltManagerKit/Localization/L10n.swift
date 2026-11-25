@@ -55,7 +55,10 @@ public enum L10n {
 
     /// Array overload for forwarding arguments from an app's short helper.
     public static func string(_ key: L10nKey, arguments: [CVarArg]) -> String {
-        let language = language
+        string(key, language: language, arguments: arguments)
+    }
+
+    static func string(_ key: L10nKey, language: AppLanguage, arguments: [CVarArg] = []) -> String {
         let value = LocalizationTables.table(for: language)?.strings[key]
         #if DEBUG
         if value == nil { assertionFailure("Missing localization: \(language.rawValue).\(key.rawValue)") }
