@@ -69,6 +69,7 @@ final class StringsEN: LocalizationTable {
         .uninstallFailed: "Some files could not be removed: %1$@",
         .uninstallNone: "None",
         .modelGStreamerMissing: "GStreamer is not installed. Games that play videos, such as intros, can hang. Install the official package for all users from %1$@\n",
+        .modelGStreamerWarningRepeats: "Harmless GStreamer warning (%1$@), repeats not shown: %2$lld",
         .modelGamePriority: "Game process priority: high (user-interactive QoS)\n",
         .modelGameExited: "Game exited with status %1$@\n",
         .modelGameExitedQuickly: "The game ended %1$@ s after it started. If nothing appeared in the headset, the file started may be a launcher that opens the game as a separate process, or the game stopped while loading (see the “game:” lines above). To start the game's own .exe, choose it in Library → game card → ⋯ → %2$@\n",

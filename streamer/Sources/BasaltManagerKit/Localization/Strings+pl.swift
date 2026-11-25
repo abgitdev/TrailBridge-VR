@@ -69,6 +69,7 @@ final class StringsPL: LocalizationTable {
         .uninstallFailed: "Nie udało się usunąć części plików: %1$@",
         .uninstallNone: "Brak",
         .modelGStreamerMissing: "GStreamer nie jest zainstalowany. Gry odtwarzające filmy, na przykład intro, mogą się zawiesić. Pobierz oficjalny pakiet z %1$@ i zainstaluj go dla wszystkich użytkowników.\n",
+        .modelGStreamerWarningRepeats: "Nieszkodliwe ostrzeżenie GStreamera (%1$@), pominięte powtórzenia: %2$lld",
         .modelGamePriority: "Priorytet procesu gry: wysoki (user-interactive QoS)\n",
         .modelGameExited: "Gra zakończyła się z kodem %1$@\n",
         .modelGameExitedQuickly: "Gra zakończyła się %1$@ s po uruchomieniu. Jeśli w goglach nic się nie pojawiło, uruchomiony plik może być launcherem, który otwiera grę jako osobny proces, albo gra zatrzymała się podczas ładowania (zobacz wiersze „game:” powyżej). Aby uruchamiać sam plik .exe gry, wybierz go w: Biblioteka → karta gry → ⋯ → %2$@\n",

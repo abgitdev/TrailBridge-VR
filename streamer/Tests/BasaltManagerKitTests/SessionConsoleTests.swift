@@ -3,6 +3,9 @@ import XCTest
 
 @MainActor
 final class SessionConsoleTests: XCTestCase {
+    private let pygobjectWarning = #"** (wine:39619): CRITICAL **: 11:21:56.465: pygobject initialization failed: could not import gobject (error was: ModuleNotFoundError("No module named 'gi'"))"#
+    private let videoCapsWarning = "(wine:40051): GStreamer-Video-CRITICAL **: 11:22:28.693: gst_video_info_from_caps: assertion 'gst_caps_is_fixed (caps)' failed"
+
     func testMissingGStreamerWarnsOncePerSession() throws {
         let console = SessionConsole()
         console.restart(with: "Starting the game…\n")
@@ -64,6 +67,153 @@ final class SessionConsoleTests: XCTestCase {
         console.restart()
         XCTAssertEqual(console.append(error, from: ObjectIdentifier(first)),
                        [error.trimmingCharacters(in: .newlines)])
+    }
+
+    func testGStreamerWarningsKeepTheFirstLineAndCountRepeatsAtEOF() {
+        let console = SessionConsole(), steam = NSObject(), game = NSObject()
+        let steamSource = ObjectIdentifier(steam), gameSource = ObjectIdentifier(game)
+        let pygobjectRepeat = pygobjectWarning.replacingOccurrences(of: "39619", with: "410")
+            .replacingOccurrences(of: "11:21:56.465", with: "15:02:04.019")
+        let videoCapsRepeat = videoCapsWarning.replacingOccurrences(of: "40051", with: "42")
+            .replacingOccurrences(of: "11:22:28.693", with: "01:00:00.007")
+        let steamTotal = "steam: " + L10n.string(.modelGStreamerWarningRepeats, "pygobject", Int64(1))
+        let gameTotal = "game: " + L10n.string(.modelGStreamerWarningRepeats, "gst_video_info_from_caps", Int64(2))
+
+        XCTAssertEqual(console.append("\r\n", from: steamSource, prefix: "steam: "), [])
+        XCTAssertEqual(console.append(pygobjectWarning + "\r\n", from: steamSource, prefix: "steam: "),
+                       ["steam: " + pygobjectWarning])
+        XCTAssertEqual(console.append("\r\n" + pygobjectRepeat + "\r\n\r\n", from: steamSource, prefix: "steam: "), [])
+        XCTAssertEqual(console.append(videoCapsWarning + "\n", from: gameSource, prefix: "game: "),
+                       ["game: " + videoCapsWarning])
+        XCTAssertEqual(console.append(videoCapsRepeat + "\nLoading level\n" + videoCapsRepeat,
+                                      from: gameSource, prefix: "game: "),
+                       ["game: Loading level"])
+        XCTAssertEqual(console.finish(steamSource, prefix: "steam: "), ["steam: ", steamTotal])
+        XCTAssertEqual(console.finish(gameSource, prefix: "game: "), [gameTotal])
+        XCTAssertEqual(console.finish(gameSource, prefix: "game: "), [])
+        XCTAssertEqual(console.log, [
+            "steam: " + pygobjectWarning, "game: " + videoCapsWarning,
+            "game: Loading level", "steam: ", steamTotal, gameTotal,
+        ].joined(separator: "\n") + "\n")
+    }
+
+    func testGStreamerWarningTypesAndSourcesAreCountedIndependently() {
+        let console = SessionConsole(), steam = NSObject(), game = NSObject()
+        let steamSource = ObjectIdentifier(steam), gameSource = ObjectIdentifier(game)
+        let warnings = pygobjectWarning + "\n" + videoCapsWarning + "\n"
+        XCTAssertEqual(console.append(warnings + warnings, from: steamSource, prefix: "steam: "),
+                       ["steam: " + pygobjectWarning, "steam: " + videoCapsWarning])
+        XCTAssertEqual(console.append(warnings, from: gameSource, prefix: "game: "),
+                       ["game: " + pygobjectWarning, "game: " + videoCapsWarning])
+        XCTAssertEqual(console.finish(gameSource, prefix: "game: "), [])
+        XCTAssertEqual(console.finish(steamSource, prefix: "steam: "), [
+            "steam: " + L10n.string(.modelGStreamerWarningRepeats, "pygobject", Int64(1)),
+            "steam: " + L10n.string(.modelGStreamerWarningRepeats, "gst_video_info_from_caps", Int64(1)),
+        ])
+
+        _ = console.append(warnings + warnings, from: steamSource, prefix: "steam: ")
+        console.restart()
+        XCTAssertEqual(console.append(warnings, from: steamSource, prefix: "steam: "),
+                       ["steam: " + pygobjectWarning, "steam: " + videoCapsWarning])
+        XCTAssertEqual(console.finish(steamSource, prefix: "steam: "), [])
+    }
+
+    func testGStreamerWarningFilterKeepsUnrelatedBlankLinesAndErrors() {
+        let console = SessionConsole(), steam = NSObject(), game = NSObject(), wine = NSObject()
+        let steamSource = ObjectIdentifier(steam), gameSource = ObjectIdentifier(game)
+        let wineSource = ObjectIdentifier(wine)
+        let unrelatedError = videoCapsWarning.replacingOccurrences(of: "gst_caps_is_fixed", with: "gst_caps_is_empty")
+        _ = console.append("Updating\n\n", from: steamSource, prefix: "steam: ")
+        XCTAssertEqual(console.append("\n" + videoCapsWarning + "\n\n", from: gameSource, prefix: "game: "),
+                       ["game: " + videoCapsWarning])
+        XCTAssertEqual(console.append("Ready\n", from: steamSource, prefix: "steam: "), ["steam: ", "steam: Ready"])
+        XCTAssertEqual(console.append(unrelatedError + "\n\n", from: gameSource, prefix: "game: "),
+                       ["game: ", "game: " + unrelatedError])
+        XCTAssertEqual(console.finish(gameSource, prefix: "game: "), ["game: "])
+        XCTAssertEqual(console.append("\t\n  \n  " + pygobjectWarning + "\n", from: wineSource, prefix: "wine: "),
+                       ["wine: \t", "wine:   " + pygobjectWarning])
+        XCTAssertEqual(console.append("\n"), [""])
+    }
+
+    func testGStreamerWarningsTolerateGLibHeadersAndPygobjectErrorDetails() {
+        let console = SessionConsole(), pipe = NSObject()
+        let source = ObjectIdentifier(pipe)
+        let pygobjectVariant = "** (wine64:42): CRITICAL **: "
+            + "pygobject initialization failed: could not import gobject (error was: ImportError('binding unavailable'))"
+        let capsVariant = videoCapsWarning.replacingOccurrences(of: "wine:40051", with: "wine64-preloader:42")
+        let capsWithoutTimestamp = videoCapsWarning.replacingOccurrences(of: "wine:40051", with: "process:7")
+            .replacingOccurrences(of: "11:22:28.693: ", with: "")
+
+        XCTAssertEqual(console.append(pygobjectWarning + "\n" + pygobjectVariant + "\n", from: source, prefix: "wine: "),
+                       ["wine: " + pygobjectWarning])
+        XCTAssertEqual(console.append(capsVariant + "\n" + capsWithoutTimestamp + "\n", from: source, prefix: "wine: "),
+                       ["wine: " + capsVariant])
+        XCTAssertEqual(console.openRepeatTotals, [
+            "wine: " + L10n.string(.modelGStreamerWarningRepeats, "gst_video_info_from_caps", Int64(1)),
+            "wine: " + L10n.string(.modelGStreamerWarningRepeats, "pygobject", Int64(1)),
+        ].sorted())
+    }
+
+    func testKnownHarmlessNoiseRecognizesPrefixedWarningsAndLocalizedTotals() {
+        let previous = L10n.language
+        defer { L10n.language = previous }
+        XCTAssertTrue(SessionConsole.isKnownHarmlessNoise(pygobjectWarning))
+        XCTAssertTrue(SessionConsole.isKnownHarmlessNoise("wine: \t" + videoCapsWarning))
+        XCTAssertFalse(SessionConsole.isKnownHarmlessNoise("wine: " +
+            videoCapsWarning.replacingOccurrences(of: "gst_caps_is_fixed", with: "gst_caps_is_empty")))
+        XCTAssertFalse(SessionConsole.isKnownHarmlessNoise("game: GStreamer could not open the video"))
+        let totals = AppLanguage.allCases.map { language in
+            L10n.language = language
+            return L10n.string(.modelGStreamerWarningRepeats, "gst_video_info_from_caps", Int64(9_999))
+        }
+        L10n.language = .en
+        for total in totals {
+            XCTAssertTrue(SessionConsole.isKnownHarmlessNoise(total), total)
+            XCTAssertTrue(SessionConsole.isKnownHarmlessNoise("other: " + total), total)
+        }
+    }
+
+    func testGStreamerFloodKeepsOneWarningAndTheExactOpenAndFinalTotal() {
+        let console = SessionConsole(), pipe = NSObject()
+        let source = ObjectIdentifier(pipe)
+        let first = "game: " + videoCapsWarning + "\n"
+        let total = "game: " + L10n.string(.modelGStreamerWarningRepeats, "gst_video_info_from_caps", Int64(9_999))
+        XCTAssertEqual(console.openRepeatTotals, [])
+        _ = console.append("\n" + videoCapsWarning + "\n", from: source, prefix: "game: ")
+        XCTAssertEqual(console.openRepeatTotals, [])
+        for _ in 1..<10_000 {
+            _ = console.append("\n" + videoCapsWarning + "\n", from: source, prefix: "game: ")
+        }
+        XCTAssertEqual(console.openRepeatTotals, [total])
+        XCTAssertEqual(console.diagnosticLog, first + total)
+        XCTAssertEqual(console.log, first)
+        XCTAssertEqual(console.finish(source), [total])
+        XCTAssertEqual(console.openRepeatTotals, [])
+        XCTAssertEqual(console.log, first + total + "\n")
+        XCTAssertEqual(console.diagnosticLog, console.log)
+    }
+
+    func testTranscriptRetainsGStreamerWarningsAndIncludesTheFinalTotal() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let path = directory.appendingPathComponent("session.console.log")
+        XCTAssertTrue(FileManager.default.createFile(atPath: path.path, contents: nil))
+
+        let console = SessionConsole(), steam = NSObject()
+        let source = ObjectIdentifier(steam)
+        let repeatedWarning = pygobjectWarning.replacingOccurrences(of: "39619", with: "410")
+        console.restart(transcriptURL: path)
+        console.registerOutputSource(source)
+        _ = console.append("\n" + pygobjectWarning + "\n\n" + repeatedWarning + "\n", from: source, prefix: "steam: ")
+        let closed = expectation(description: "writer closed after EOF")
+        console.closeTranscript { closed.fulfill() }
+        let total = "steam: " + L10n.string(.modelGStreamerWarningRepeats, "pygobject", Int64(1))
+        XCTAssertEqual(console.finish(source, prefix: "steam: "), [total])
+        await fulfillment(of: [closed], timeout: 5)
+        XCTAssertEqual(try String(contentsOf: path), [
+            "steam: ", "steam: " + pygobjectWarning, "steam: ", "steam: " + repeatedWarning, total,
+        ].joined(separator: "\n") + "\n")
     }
 
     func testReconnectStatusParsesCompleteStreamerLinesAndClears() {

@@ -16,6 +16,9 @@ All notable changes to TrailBridge VR are documented here.
 - Setup checks for GStreamer, which Wine uses to play videos in games, and links to the official
   package. Diagnostic reports include its status and version when available. Games can still
   start without it, with one warning per game session in the log.
+- The session log shows the first occurrence of each known harmless GStreamer warning and totals
+  its repeats when the output closes. Diagnostic reports include repeat counts during a session,
+  and recordings keep the full output and final counts.
 
 ## 0.2.1 — 2026-11-15
 

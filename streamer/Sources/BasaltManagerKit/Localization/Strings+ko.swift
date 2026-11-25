@@ -69,6 +69,7 @@ final class StringsKO: LocalizationTable {
         .uninstallFailed: "일부 파일을 제거하지 못했어요: %1$@",
         .uninstallNone: "없음",
         .modelGStreamerMissing: "GStreamer가 설치되어 있지 않습니다. 시작 영상 등의 동영상을 재생하는 게임이 멈출 수 있습니다. %1$@에서 공식 패키지를 받아 모든 사용자용으로 설치하세요.\n",
+        .modelGStreamerWarningRepeats: "무해한 GStreamer 경고(%1$@), 생략된 반복 횟수: %2$lld",
         .modelGamePriority: "게임 프로세스 우선순위: 높음(user-interactive QoS)\n",
         .modelGameExited: "게임 종료 코드: %1$@\n",
         .modelGameExitedQuickly: "게임이 시작 후 %1$@초 만에 종료되었습니다. 헤드셋에 아무것도 나타나지 않았다면, 실행한 파일이 게임을 별도 프로세스로 여는 런처이거나 게임이 로딩 중에 멈췄을 수 있습니다(위의 “game:” 줄 참고). 게임 본체의 .exe를 실행하려면 라이브러리 → 게임 카드 → ⋯ → %2$@에서 선택하세요.\n",

@@ -66,6 +66,7 @@ public enum L10nKey: String, CaseIterable, Sendable {
     case uninstallFailed
     case uninstallNone
     case modelGStreamerMissing
+    case modelGStreamerWarningRepeats
     case modelGamePriority
     case modelGameExited
     case modelGameExitedQuickly

@@ -264,6 +264,23 @@ final class DiagnosticsTests: XCTestCase {
         XCTAssertEqual(tail.last, "line \(DiagnosticReport.maximumLogLines + 25)")
     }
 
+    @MainActor func testReportKeepsAnOpenGStreamerTotalWhenTheFirstWarningFallsOutOfTheTail() {
+        let console = SessionConsole(), pipe = NSObject()
+        let source = ObjectIdentifier(pipe)
+        let warning = "(process:42): GStreamer-Video-CRITICAL **: "
+            + "gst_video_info_from_caps: assertion 'gst_caps_is_fixed (caps)' failed"
+        _ = console.append(warning + "\n" + warning + "\n", from: source, prefix: "game: ")
+        _ = console.append(String(repeating: "Waiting for the game\n", count: DiagnosticReport.maximumLogLines))
+        let total = "game: " + L10n.string(.modelGStreamerWarningRepeats, "gst_video_info_from_caps", Int64(1))
+
+        let report = makeReport(log: console.diagnosticLog)
+        XCTAssertEqual(report.logTail, Array(repeating: "Waiting for the game", count: DiagnosticReport.maximumLogLines - 1)
+                       + [total])
+        XCTAssertTrue(report.markdown(redactedWith: redactor).contains(total))
+        XCTAssertTrue(console.log.hasPrefix("game: " + warning + "\n"))
+        XCTAssertEqual(console.openRepeatTotals, [total])
+    }
+
     func testSourceRevisionReadsLooseAndPackedReferences() throws {
         let repository = try temporaryDirectory()
         let git = repository.appendingPathComponent(".git", isDirectory: true)

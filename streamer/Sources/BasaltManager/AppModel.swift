@@ -2628,7 +2628,7 @@ final class BasaltAppModel: ObservableObject {
                 profileName: openSession?.profileName,
                 metrics: openSession?.metrics),
             recentSessions: sessionHistory,
-            log: includeLog ? console.log : nil)
+            log: includeLog ? console.diagnosticLog : nil)
     }
 
     func export(_ text: String, to url: URL) {

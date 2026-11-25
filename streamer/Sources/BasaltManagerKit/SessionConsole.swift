@@ -26,7 +26,60 @@ public final class SessionConsole: ObservableObject {
     /// nil for the app's own messages), so concurrent outputs never splice
     /// into each other mid-line.
     private var partialLines = [ObjectIdentifier?: String]()
-    private var deviceErrorCounts = [ObjectIdentifier?: Int]()
+
+    /// Messages that can flood the log while a single output pipe is open.
+    private enum RepeatedLine: Hashable {
+        case deviceError
+        case gStreamerWarning(String)
+    }
+
+    /// The counts and one line of lookahead for a pipe with a fixed display prefix.
+    private struct SourceOutput {
+        let prefix: String
+        var counts = [RepeatedLine: Int]()
+        var pendingBlank: String?
+
+        mutating func count(_ line: RepeatedLine) -> Int {
+            counts[line, default: 0] += 1
+            return counts[line, default: 0]
+        }
+    }
+
+    /// Known harmless GLib messages, keyed by the names shown in repeat totals.
+    private nonisolated static let gStreamerWarnings: [(name: String, pattern: NSRegularExpression)] = {
+        let process = #"(?:\*\* )?\([^():\s]+:[0-9]+\): "#
+        let timestamp = #"(?:[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]+)?: )?"#
+        let severityEnd = #" \*\*: "#
+        /// Wine's GStreamer support doesn't use the Python bindings.
+        let pygobject = (name: "pygobject", domainAndLevel: "CRITICAL",
+                         message: #"pygobject initialization failed: could not import gobject \(error was: .*\)"#)
+        /// GStreamer can report unfixed caps during format negotiation and still play video.
+        let videoCaps = (name: "gst_video_info_from_caps", domainAndLevel: "GStreamer-Video-CRITICAL",
+                         message: #"gst_video_info_from_caps: assertion 'gst_caps_is_fixed \(caps\)' failed"#)
+        return [pygobject, videoCaps].map { rule in
+            let pattern = "^" + process + rule.domainAndLevel + severityEnd + timestamp + rule.message + "$"
+            return (rule.name, try! NSRegularExpression(pattern: pattern))
+        }
+    }()
+
+    /// A log can contain totals written before the user changed the app language.
+    private nonisolated static let gStreamerTotalPattern: NSRegularExpression = {
+        let count = #"\p{Nd}+(?:[.,'’\p{Zs}]\p{Nd}+)*"#
+        let formats = AppLanguage.allCases.compactMap {
+            LocalizationTables.table(for: $0)?.strings[.modelGStreamerWarningRepeats]
+        }
+        let patterns = formats.flatMap { format in
+            gStreamerWarnings.map { warning in
+                format.replacingOccurrences(of: "%1$@", with: warning.name)
+                    .components(separatedBy: "%2$lld")
+                    .map(NSRegularExpression.escapedPattern(for:))
+                    .joined(separator: count)
+            }
+        }
+        return try! NSRegularExpression(pattern: "^(?:" + patterns.joined(separator: "|") + ")$")
+    }()
+
+    private var outputBySource = [ObjectIdentifier?: SourceOutput]()
     private var warnedAboutMissingGStreamer = false
     private var transcript: ConsoleTranscript?
     private var transcriptsBySource = [ObjectIdentifier: ConsoleTranscript]()
@@ -47,6 +100,19 @@ public final class SessionConsole: ObservableObject {
         return log[start...end].trimmingCharacters(in: .whitespaces)
     }
 
+    /// Repeat totals for sources that have yet to reach EOF.
+    public var openRepeatTotals: [String] {
+        outputBySource.values.flatMap(Self.repeatTotals(for:)).sorted()
+    }
+
+    /// Puts live counts at the end so they survive the report's log tail limit.
+    public var diagnosticLog: String {
+        let totals = openRepeatTotals
+        guard !totals.isEmpty else { return log }
+        let separator = log.isEmpty || log.hasSuffix("\n") ? "" : "\n"
+        return log + separator + totals.joined(separator: "\n")
+    }
+
     /// Starts a new log. A stream session also clears the samples; a Windows
     /// utility keeps the last stream's charts. The transcript file gets the
     /// same redaction as an exported log; the log on screen stays as it is.
@@ -62,7 +128,7 @@ public final class SessionConsole: ObservableObject {
         log = firstLine
         headsetDisconnected = false
         partialLines.removeAll()
-        deviceErrorCounts.removeAll()
+        outputBySource.removeAll()
         warnedAboutMissingGStreamer = false
         if clearingSamples { samples.removeAll() }
     }
@@ -92,7 +158,7 @@ public final class SessionConsole: ObservableObject {
         return commit(lines, from: source, prefix: prefix)
     }
 
-    /// Logs and returns the unfinished line `source` left when it closed.
+    /// Logs and returns the unfinished line and repeat totals when `source` closes.
     public func finish(_ source: ObjectIdentifier?, prefix: String = "") -> [String] {
         defer {
             if let source, let writer = transcriptsBySource.removeValue(forKey: source),
@@ -101,20 +167,16 @@ public final class SessionConsole: ObservableObject {
             }
         }
         let lines = partialLines.removeValue(forKey: source).map { [$0] } ?? []
-        let completed = commit(lines, from: source, prefix: prefix)
-        if let count = deviceErrorCounts.removeValue(forKey: source), count > 1 {
-            return completed + commit(
-                ["err:   Device error: suppressed \(count - 1) repeated command buffer failures (total)"],
-                from: source, prefix: prefix)
-        }
-        return completed
+        return commit(lines, from: source, prefix: prefix, finishing: true)
     }
 
-    private func commit(_ lines: [String], from source: ObjectIdentifier?, prefix: String) -> [String] {
-        guard !lines.isEmpty else { return [] }
+    private func commit(_ lines: [String], from source: ObjectIdentifier?, prefix: String,
+                        finishing: Bool = false) -> [String] {
+        guard !lines.isEmpty || finishing else { return [] }
         // Persist before the live console's flood suppression and tail trim.
-        // Every source line, including repeated GPU errors, reaches disk.
-        if let writer = source.flatMap({ transcriptsBySource[$0] }) ?? transcript {
+        // Every source line, including repeated GPU and GStreamer warnings, reaches disk.
+        let writer = source.flatMap({ transcriptsBySource[$0] }) ?? transcript
+        if !lines.isEmpty, let writer {
             writer.append(lines.map { prefix + $0 + "\n" }.joined())
         }
         if prefix.isEmpty {
@@ -126,23 +188,89 @@ public final class SessionConsole: ObservableObject {
                 }
             }
         }
-        // A lost Metal device can reject every subsequent command buffer. Keep
-        // the first full error and logarithmically spaced counts so that this
-        // flood cannot evict the compiler errors that preceded it. Match only
-        // DXMT's raw error line, after assembling chunks and before prefixing.
-        let prefixed = lines.compactMap { line -> String? in
-            guard line.hasPrefix("err:   Device error at frame ") else { return prefix + line }
-            let count = deviceErrorCounts[source, default: 0] + 1
-            deviceErrorCounts[source] = count
-            if count == 1 { return prefix + line }
-            let repeats = count - 1
-            guard repeats & (repeats - 1) == 0 else { return nil }
-            return prefix + "err:   Device error: suppressed \(repeats) repeated command buffer failures"
+        var output = outputBySource.removeValue(forKey: source) ?? SourceOutput(prefix: prefix)
+        var prefixed = [String]()
+        for line in lines {
+            let displayLine = prefix + line
+            let message = line.drop(while: \.isWhitespace)
+            let precedingBlank = output.pendingBlank
+            output.pendingBlank = nil
+            if !prefix.isEmpty, message.isEmpty {
+                if let precedingBlank { prefixed.append(precedingBlank) }
+                output.pendingBlank = displayLine
+                continue
+            }
+            if let warning = Self.harmlessWarning(in: message) {
+                // GLib adds one blank immediately before its message.
+                if output.count(.gStreamerWarning(warning)) == 1 { prefixed.append(displayLine) }
+                continue
+            }
+            if let precedingBlank { prefixed.append(precedingBlank) }
+
+            // A lost Metal device can reject every subsequent command buffer.
+            // Logarithmically spaced counts keep that flood from evicting the
+            // compiler errors that preceded it. Match only DXMT's raw error
+            // line, after assembling chunks and before prefixing.
+            if line.hasPrefix("err:   Device error at frame ") {
+                let repeats = output.count(.deviceError) - 1
+                if repeats == 0 {
+                    prefixed.append(displayLine)
+                } else if repeats & (repeats - 1) == 0 {
+                    prefixed.append(prefix + "err:   Device error: suppressed \(repeats) repeated command buffer failures")
+                }
+            } else {
+                prefixed.append(displayLine)
+            }
+        }
+        if finishing {
+            if let pendingBlank = output.pendingBlank { prefixed.append(pendingBlank) }
+            let totals = Self.repeatTotals(for: output)
+            prefixed += totals
+            if !totals.isEmpty {
+                writer?.append(totals.joined(separator: "\n") + "\n")
+            }
+        } else {
+            outputBySource[source] = output
         }
         guard !prefixed.isEmpty else { return [] }
         log += prefixed.map { $0 + "\n" }.joined()
         if log.utf8.count > Self.maximumLogBytes { trimLog() }
         return prefixed
+    }
+
+    private static func repeatTotals(for output: SourceOutput) -> [String] {
+        var totals = gStreamerWarnings.compactMap { warning -> String? in
+            guard let count = output.counts[.gStreamerWarning(warning.name)], count > 1 else { return nil }
+            return output.prefix + L10n.string(.modelGStreamerWarningRepeats, warning.name, Int64(count - 1))
+        }
+        if let count = output.counts[.deviceError], count > 1 {
+            totals.append(output.prefix + "err:   Device error: suppressed \(count - 1) repeated command buffer failures (total)")
+        }
+        return totals
+    }
+
+    /// Recognizes known GStreamer warnings and their totals in raw or source-prefixed log lines.
+    public nonisolated static func isKnownHarmlessNoise(_ line: String) -> Bool {
+        func matches(_ message: Substring) -> Bool {
+            if harmlessWarning(in: message) != nil { return true }
+            let text = String(message)
+            let range = NSRange(text.startIndex..., in: text)
+            return gStreamerTotalPattern.firstMatch(in: text, range: range) != nil
+        }
+
+        let message = line.drop(while: \.isWhitespace)
+        if matches(message) { return true }
+        guard let colon = message.firstIndex(of: ":") else { return false }
+        let content = message[message.index(after: colon)...]
+        guard content.first?.isWhitespace == true else { return false }
+        return matches(content.drop(while: \.isWhitespace))
+    }
+
+    private nonisolated static func harmlessWarning(in message: Substring) -> String? {
+        guard message.hasPrefix("(") || message.hasPrefix("** (") else { return nil }
+        let line = String(message)
+        let range = NSRange(line.startIndex..., in: line)
+        return gStreamerWarnings.first { $0.pattern.firstMatch(in: line, range: range) != nil }?.name
     }
 
     public func record(_ sample: StreamMetricSample) {

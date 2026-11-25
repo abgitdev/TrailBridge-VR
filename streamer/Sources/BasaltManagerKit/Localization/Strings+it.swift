@@ -69,6 +69,7 @@ final class StringsIT: LocalizationTable {
         .uninstallFailed: "Impossibile rimuovere alcuni file: %1$@",
         .uninstallNone: "Nessuno",
         .modelGStreamerMissing: "GStreamer non è installato. I giochi che riproducono video, ad esempio filmati introduttivi, possono bloccarsi. Scarica il pacchetto ufficiale da %1$@ e installalo per tutti gli utenti.\n",
+        .modelGStreamerWarningRepeats: "Avviso innocuo di GStreamer (%1$@), ripetizioni omesse: %2$lld",
         .modelGamePriority: "Priorità del processo di gioco: alta (user-interactive QoS)\n",
         .modelGameExited: "Gioco terminato con codice %1$@\n",
         .modelGameExitedQuickly: "Il gioco è terminato %1$@ s dopo l’avvio. Se nel visore non è apparso nulla, il file avviato può essere un launcher che apre il gioco in un processo separato, oppure il gioco si è fermato durante il caricamento (vedi le righe «game:» sopra). Per avviare l’.exe del gioco stesso, sceglilo in Libreria → scheda del gioco → ⋯ → %2$@\n",

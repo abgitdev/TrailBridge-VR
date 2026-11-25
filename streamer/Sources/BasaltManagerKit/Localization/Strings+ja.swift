@@ -69,6 +69,7 @@ final class StringsJA: LocalizationTable {
         .uninstallFailed: "一部のファイルを削除できませんでした：%1$@",
         .uninstallNone: "なし",
         .modelGStreamerMissing: "GStreamerがインストールされていません。オープニングなどの動画を再生するゲームが途中で止まることがあります。%1$@から公式パッケージを入手し、すべてのユーザ向けにインストールしてください。\n",
+        .modelGStreamerWarningRepeats: "無害なGStreamerの警告（%1$@）、省略した繰り返し回数：%2$lld",
         .modelGamePriority: "ゲームプロセスの優先度：高（user-interactive QoS）\n",
         .modelGameExited: "ゲームがコード%1$@で終了しました\n",
         .modelGameExitedQuickly: "ゲームは起動から%1$@秒後に終了しました。ヘッドセットに何も表示されなかった場合、起動したファイルがゲームを別のプロセスで開くランチャーであるか、読み込み中にゲームが停止した可能性があります（上の「game:」の行を確認してください）。ゲーム本体の.exeを起動するには、ライブラリ → ゲームカード → ⋯ → %2$@ で選択してください。\n",

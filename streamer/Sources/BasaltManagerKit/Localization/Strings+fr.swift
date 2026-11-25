@@ -69,6 +69,7 @@ final class StringsFR: LocalizationTable {
         .uninstallFailed: "Certains fichiers n’ont pas pu être supprimés : %1$@",
         .uninstallNone: "Aucun",
         .modelGStreamerMissing: "GStreamer n’est pas installé. Les jeux qui lisent des vidéos, par exemple une cinématique d’introduction, peuvent se bloquer. Téléchargez le paquet officiel depuis %1$@ et installez-le pour tous les utilisateurs.\n",
+        .modelGStreamerWarningRepeats: "Avertissement sans conséquence de GStreamer (%1$@), répétitions masquées : %2$lld",
         .modelGamePriority: "Priorité du processus du jeu : élevée (user-interactive QoS)\n",
         .modelGameExited: "Le jeu s’est arrêté avec le code %1$@\n",
         .modelGameExitedQuickly: "Le jeu s’est arrêté %1$@ s après son lancement. Si rien n’est apparu dans le casque, le fichier lancé est peut-être un lanceur qui ouvre le jeu dans un processus séparé, ou le jeu s’est arrêté pendant le chargement (voir les lignes « game: » ci-dessus). Pour lancer le .exe du jeu lui-même, choisissez-le dans Bibliothèque → fiche du jeu → ⋯ → %2$@\n",
