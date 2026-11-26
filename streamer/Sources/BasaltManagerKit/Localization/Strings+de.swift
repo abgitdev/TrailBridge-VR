@@ -609,6 +609,7 @@ final class StringsDE: LocalizationTable {
         .licensesTitle: "Lizenzen",
         .licensesMissing: "In diesem Build wurde kein Lizenztext gefunden.",
         // MARK: - Settings language
+        .languageNativeName: "Deutsch",
         .settingsLanguage: "Sprache",
         .settingsLanguageImmediate: "Die Sprache ändert sich sofort.",
         .settingsTranslationNotReviewed: "Übersetzung nicht geprüft",

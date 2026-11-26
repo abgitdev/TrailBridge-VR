@@ -126,7 +126,7 @@ final class DamagedHeadsetTrustTests: XCTestCase {
                                              now: { 0 }, signature: { _ in nil }, read: { _ in [name] })
                 .accept(hostname: name, ip: "192.0.2.1") { _ in XCTFail("an invalid name is never reported") })
         }
-        for name in ["Quest 3", "Quest-3", "Шлем", "クエスト", "Quest at home"] {
+        for name in ["Quest 3", "Quest-3", "헤드셋", "クエスト", "Quest at home"] {
             XCTAssertTrue(HeadsetTrustStore.validHostname(name), name)
         }
     }

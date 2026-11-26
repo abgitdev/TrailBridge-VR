@@ -12,7 +12,7 @@ public struct VerifiedMonth: Equatable, Sendable {
         self.month = month
     }
 
-    /// "November 2026" or "ноябрь 2026 г.", in the app's language.
+    /// "November 2026" or "listopad 2026", in the app's language.
     public func text(locale: Locale) -> String {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(secondsFromGMT: 0)!
@@ -33,8 +33,6 @@ public struct SteamCatalogGame: Identifiable, Equatable, Sendable {
     public let name: String
     public let appID: String?
     public let environmentName: String?
-    public let status: String
-    public let note: String
     public let needsOpenVR: Bool
     /// When the game was last checked in a headset; nil when it never was.
     public var verifiedIn: VerifiedMonth? = nil
@@ -45,32 +43,21 @@ public struct SteamCatalogGame: Identifiable, Equatable, Sendable {
 
     public static let verified: [Self] = [
         .init(id: "2669380", name: "BRUTALISTICK VR", appID: "2669380",
-              environmentName: "brutalistick-vr", status: "Проверена в шлеме",
-              note: "Проверена на Mac mini M4 и Quest 3: запуск, руки, ходьба — работает стабильно.", needsOpenVR: true,
-              verifiedIn: november2026),
+              environmentName: "brutalistick-vr", needsOpenVR: true, verifiedIn: november2026),
         .init(id: "1032430", name: "Blood Trail", appID: "1032430",
-              environmentName: "blood-trail", status: "Проверена в шлеме",
-              note: "Проверена на Mac mini M4 и Quest 3: уровни, стрельба, частицы, сессия 54 минуты. Направление ходьбы зависит от настройки контроллера; бега на контроллерах нет.", needsOpenVR: true,
-              verifiedIn: november2026),
+              environmentName: "blood-trail", needsOpenVR: true, verifiedIn: november2026),
         // VTOL VR draws both eyes in one pass; GameCompatibilityFix
         // vtolVRSeparateEyePasses makes the right eye work.
         .init(id: "667970", name: "VTOL VR", appID: "667970",
-              environmentName: "vtol-vr", status: "Проверена в шлеме",
-              note: "Проверена на Mac mini M4 и Quest 3: полёт с ботами, оба глаза. TrailBridge сам меняет настройку отрисовки игры, без неё правый глаз чёрный.", needsOpenVR: true,
-              verifiedIn: november2026),
+              environmentName: "vtol-vr", needsOpenVR: true, verifiedIn: november2026),
         // BONELAB runs its own OpenXR loader and needs no OpenComposite.
         .init(id: "1592190", name: "BONELAB", appID: "1592190",
-              environmentName: "bonelab", status: "Проверена в шлеме",
-              note: "Проверена на Mac mini M4 и Quest 3: запуск и игра через собственный OpenXR игры. Проверялась короткими сеансами.", needsOpenVR: false,
-              verifiedIn: november2026),
+              environmentName: "bonelab", needsOpenVR: false, verifiedIn: november2026),
         .init(id: "629730", name: "Blade & Sorcery", appID: "629730",
-              environmentName: "blade-sorcery", status: "Проверена в шлеме",
-              note: "Проверена на Mac mini M4 и Quest 3: меню и игра. Проверялась короткими сеансами.", needsOpenVR: true,
-              verifiedIn: november2026),
+              environmentName: "blade-sorcery", needsOpenVR: true, verifiedIn: november2026),
     ]
-    public static let other = Self(id: "other", name: "Другая игра", appID: nil,
-        environmentName: nil, status: "Не проверена",
-        note: "В TrailBridge эта игра не проверялась. Может не запуститься или работать с ошибками.", needsOpenVR: false)
+    public static let other = Self(id: "other", name: "Another game", appID: nil,
+        environmentName: nil, needsOpenVR: false)
     public static let all = verified + [other]
 
     public func bottleName(custom: String = "steam-games") throws -> String {
@@ -373,32 +360,10 @@ public enum SteamTrouble: Equatable, Sendable {
 
 public enum SteamSetupActivity: Equatable {
     case installer, updating, timedOut, cancelled, stopped, openingSignIn
-    public var message: String {
-        switch self {
-        case .installer: "Откроется установщик Windows. Пройдите его шаги и сами примите соглашение Steam."
-        case .updating: "Ждём завершения обновления Steam. После проверки откроем окно входа."
-        case .timedOut: "За 15 минут обновление не подтвердилось. Проверьте окно Steam и повторите проверку."
-        case .cancelled: "Установка отменена: Steam не найден. Можно повторить установку."
-        case .stopped: "Ожидание остановлено. Можно продолжить позже."
-        case .openingSignIn: "Закрываем Steam и ждём завершения его процессов. Затем попробуем открыть окно входа."
-        }
-    }
 }
 
 public enum SteamWizardStep: Int, CaseIterable {
     case choose = 1, create, prepare, steam, signIn, game, profile, done
-    public var title: String {
-        switch self {
-        case .choose: "Выберите игру"
-        case .create: "Создайте окружение"
-        case .prepare: "Подготовьте окружение"
-        case .steam: "Установите Steam"
-        case .signIn: "Войдите в Steam"
-        case .game: "Установите игру"
-        case .profile: "Добавьте игру в библиотеку"
-        case .done: "Игра добавлена"
-        }
-    }
 }
 
 public struct SteamWizardFacts {
@@ -486,6 +451,5 @@ public struct SteamWizardDiskState: Sendable {
 }
 
 public enum SteamWizardCopy {
-    public static let endToEndCaveat = "Сам мастер пока не проверен от начала до конца на чистом окружении."
     public static func failure(_ lead: String, detail: String) -> String { lead + "\n" + detail }
 }

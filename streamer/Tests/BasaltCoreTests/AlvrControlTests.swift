@@ -78,13 +78,13 @@ final class AlvrControlTests: XCTestCase {
                 "U+\(String(scalar.value, radix: 16))")
         }
         // An ordinary name is untouched, in any script.
-        var plain = Self.acceptedPrefix(protocolId: 20, name: "Quest 3 — гостиная")
+        var plain = Self.acceptedPrefix(protocolId: 20, name: "Quest 3 — salón")
         plain.append(0)
         guard case .accepted(_, let plainName, _, _) =
                 try AlvrClientConnectionDecoder.decode(plain) else {
             return XCTFail("expected an accepted connection")
         }
-        XCTAssertEqual(plainName, "Quest 3 — гостиная")
+        XCTAssertEqual(plainName, "Quest 3 — salón")
     }
 
     func testDecodesVideoCapabilitiesAndEmbeddedJSON() throws {

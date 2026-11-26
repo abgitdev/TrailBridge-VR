@@ -24,10 +24,10 @@ final class SetupTourTests: XCTestCase {
         try XCTUnwrap(tour.presentation)
     }
 
-    private func russian(_ body: () throws -> Void) rethrows {
+    private func english(_ body: () throws -> Void) rethrows {
         let previous = L10n.language
         defer { L10n.language = previous }
-        L10n.language = .ru
+        L10n.language = .en
         try body()
     }
 
@@ -53,15 +53,15 @@ final class SetupTourTests: XCTestCase {
     // MARK: - Chapter 1: Mac
 
     func testMacNamesTheMissingPartsThenWhoBuildsThem() throws {
-        try russian {
+        try english {
             var facts = LearningFixture.unbuiltMac
             facts.setupChecks = LearningFixture.checks(missing: ["wine", "runtime"])
             var tour = try tour(.mac, facts)
             XCTAssertEqual(tour.phase, .step(.macSummary))
             var hint = try shown(tour)
-            XCTAssertEqual(hint.label, "Mac · шаг 1 из 2")
-            XCTAssertEqual(hint.text, "Не хватает частей программы: «Запускает игры Windows на Mac», "
-                + "«Передаёт VR-изображение игры в шлем».")
+            XCTAssertEqual(hint.label, "Mac · step 1 of 2")
+            XCTAssertEqual(hint.text, "Parts of the app are missing: “Runs Windows games on your Mac”, "
+                + "“Connects the game's VR output to the headset”.")
             XCTAssertEqual(hint.target, .setupSummary)
             XCTAssertEqual(hint.section, .setup)
             XCTAssertEqual(hint.buttons, [.next])
@@ -70,13 +70,13 @@ final class SetupTourTests: XCTestCase {
             tour.handle(.next)
             XCTAssertEqual(tour.phase, .step(.macWhoBuilds))
             hint = try shown(tour)
-            XCTAssertEqual(hint.label, "Mac · шаг 2 из 2")
-            XCTAssertEqual(hint.text, "Их собирает тот, кто устанавливал TrailBridge. "
-                + "Если это были не вы — позовите его. Потом нажмите «Проверить снова».")
+            XCTAssertEqual(hint.label, "Mac · step 2 of 2")
+            XCTAssertEqual(hint.text, "The person who installed TrailBridge builds them. "
+                + "If that was not you, ask them. Then click “Check Again”.")
             XCTAssertEqual(hint.target, .setupSummary)
             XCTAssertEqual(hint.buttons, [.back, .checkAgain])
             XCTAssertEqual(hint.primaryButton, .checkAgain)
-            XCTAssertEqual(hint.buttons.map(hint.title(of:)), ["Назад", "Проверить снова"])
+            XCTAssertEqual(hint.buttons.map(hint.title(of:)), ["Back", "Check Again"])
         }
     }
 
@@ -95,22 +95,22 @@ final class SetupTourTests: XCTestCase {
                                  required: true, action: SetupInspector.copyRosettaCommandAction)
         let runtime = SetupCheck(id: "runtime", title: "runtime", detail: "", status: .actionNeeded,
                                  required: true, action: "Open Build Instructions")
-        try russian {
+        try english {
             for missing in [[wine], [rosetta], [wine, rosetta]] {
                 let tour = try tour(.mac, facts(missing), resumeAt: Step.macWhoBuilds.rawValue)
                 let hint = try shown(tour)
-                XCTAssertEqual(hint.text, "У каждой в списке ниже есть своя кнопка. "
-                    + "Нажмите её и сделайте то, что написано в строке. "
-                    + "Когда всё закончится, нажмите «Проверить снова».")
+                XCTAssertEqual(hint.text, "Each has its own button in the list below. "
+                    + "Click it and follow what its row says. "
+                    + "When that is done, click “Check Again”.")
                 XCTAssertEqual(hint.buttons, [.back, .checkAgain])
             }
             // One part that has to be built: the old words.
             let built = try tour(.mac, facts([wine, runtime]), resumeAt: Step.macWhoBuilds.rawValue)
-            XCTAssertEqual(try shown(built).text, "Их собирает тот, кто устанавливал TrailBridge. "
-                + "Если это были не вы — позовите его. Потом нажмите «Проверить снова».")
+            XCTAssertEqual(try shown(built).text, "The person who installed TrailBridge builds them. "
+                + "If that was not you, ask them. Then click “Check Again”.")
             // Rosetta is named in the summary in its row's words.
             XCTAssertEqual(try shown(try tour(.mac, facts([rosetta]))).text,
-                           "Не хватает частей программы: «Выполняет на Mac код для процессоров Intel».")
+                           "Parts of the app are missing: “Runs code made for Intel processors on the Mac”.")
         }
         let previous = L10n.language
         defer { L10n.language = previous }
@@ -156,10 +156,10 @@ final class SetupTourTests: XCTestCase {
     /// With no checks nobody knows what is missing, and with an unsupported
     /// Mac nobody could build it: one card, "Check again", never "done".
     func testMacWithoutChecksOrUnsupportedOffersOnlyCheckAgain() throws {
-        try russian {
+        try english {
             var unknown = try tour(.mac, LearningFacts())
             var hint = try shown(unknown)
-            XCTAssertEqual(hint.text, "Не удалось проверить Mac. Нажмите «Проверить снова».")
+            XCTAssertEqual(hint.text, "The Mac could not be checked. Click “Check Again”.")
             XCTAssertEqual(hint.buttons, [.checkAgain])
             unknown.handle(.next)
             unknown.handle(.checkAgain)
@@ -170,7 +170,7 @@ final class SetupTourTests: XCTestCase {
             facts.setupChecks = LearningFixture.checks(unsupportedMac: true)
             var unsupported = try tour(.mac, facts)
             hint = try shown(unsupported)
-            XCTAssertEqual(hint.text, "Для TrailBridge нужны Apple Silicon и macOS 14 или новее.")
+            XCTAssertEqual(hint.text, "TrailBridge requires Apple Silicon and macOS 14 or later.")
             XCTAssertEqual(hint.buttons, [.checkAgain])
             unsupported.handle(.next)
             XCTAssertEqual(unsupported.phase, .step(.macSummary))
@@ -180,7 +180,7 @@ final class SetupTourTests: XCTestCase {
             XCTAssertEqual(unknown.phase, .step(.macSummary))
             XCTAssertEqual(try shown(unknown).buttons, [.next])
             XCTAssertEqual(try shown(unknown).text,
-                           "Не хватает частей программы: «Запускает игры Windows на Mac».")
+                           "Parts of the app are missing: “Runs Windows games on your Mac”.")
         }
     }
 
@@ -225,26 +225,26 @@ final class SetupTourTests: XCTestCase {
     // MARK: - Chapter 3: Game
 
     func testGameStartsWithTheQuestionAndItsTwoAnswers() throws {
-        try russian {
+        try english {
             var tour = try tour(.game, LearningFixture.newcomer)
             XCTAssertEqual(tour.phase, .step(.gameChoose))
             let hint = try shown(tour)
-            XCTAssertEqual(hint.label, "Игра · шаг 1 из 5")
-            XCTAssertEqual(hint.text, "Откуда ваша игра: куплена в Steam или лежит папкой на диске? "
-                + "Нажмите «Из Steam» или «Из папки».")
+            XCTAssertEqual(hint.label, "Game · step 1 of 5")
+            XCTAssertEqual(hint.text, "Where is your game: bought on Steam, or in a folder on a disk? "
+                + "Click “From Steam” or “From a Folder”.")
             XCTAssertEqual(hint.target, .libraryAddButtons)
             XCTAssertEqual(hint.section, .library)
             XCTAssertEqual(hint.buttons, [.choose(.steam), .choose(.folder)])
-            XCTAssertEqual(hint.buttons.map(hint.title(of:)), ["Из Steam", "Из папки"])
+            XCTAssertEqual(hint.buttons.map(hint.title(of:)), ["From Steam", "From a Folder"])
             XCTAssertNil(hint.primaryButton)
             // The other ways are a quiet link, named and not walked.
-            XCTAssertEqual(hint.help?.title, "Другие способы")
+            XCTAssertEqual(hint.help?.title, "Other Ways")
             XCTAssertEqual(hint.help?.tips, [
-                "Установщик из GOG или itch.io: «+» → «Добавить игру…».",
-                "Beat Saber через BSManager: «+» → «Установить BSManager…».",
-                "Игра стоит в Whisky или CrossOver: её карточка появится в разделе «Библиотека». "
-                    + "Нажмите на ней «Скопировать в TrailBridge…».",
-                "Для этих способов пошаговых подсказок пока нет.",
+                "An installer from GOG or itch.io: “+”, then “Add Game…”.",
+                "Beat Saber through BSManager: “+”, then “Install BSManager…”.",
+                "A game installed in Whisky or CrossOver: its card shows in “Library”. "
+                    + "Click “Copy into Basalt…” on it.",
+                "These ways have no step-by-step hints yet.",
             ])
             XCTAssertEqual(hint.help?.options, [])
             // The question has no "Next": only an answer moves on.
@@ -254,28 +254,28 @@ final class SetupTourTests: XCTestCase {
     }
 
     func testEachAnswerSaysWhatToDoInItsWindowBeforeTheWindowOpens() throws {
-        try russian {
+        try english {
             var steam = try tour(.game, LearningFixture.newcomer)
             steam.handle(.choose(.steam))
             XCTAssertEqual(steam.phase, .step(.gameSteam))
             XCTAssertEqual(steam.branch, .steam)
             var hint = try shown(steam)
-            XCTAssertEqual(hint.label, "Игра · шаг 2 из 5")
-            XCTAssertEqual(hint.text, "Нажмите «Добавить игру Steam…». В окне выберите свою игру; "
-                + "если её нет в списке — «Другая игра». Затем «Далее».")
+            XCTAssertEqual(hint.label, "Game · step 2 of 5")
+            XCTAssertEqual(hint.text, "Click “Add Steam Game…”. In the window, pick your game; "
+                + "if it is not listed, pick “Another game”. Then click “Next”.")
             XCTAssertEqual(hint.target, .libraryAddSteam)
             XCTAssertEqual(hint.buttons, [.back, .help])
-            XCTAssertEqual(hint.help?.title, "Не получается?")
+            XCTAssertEqual(hint.help?.title, "Not working?")
             XCTAssertEqual(hint.help?.options, [])
 
             var folder = try tour(.game, LearningFixture.newcomer)
             folder.handle(.choose(.folder))
             XCTAssertEqual(folder.phase, .step(.gameFolder))
             hint = try shown(folder)
-            XCTAssertEqual(hint.text, "Нажмите «Добавить игру из папки…». В окне — «Выбрать папку…», "
-                + "проверьте выбранный .exe, затем «Добавить игру».")
+            XCTAssertEqual(hint.text, "Click “Add Game from Folder…”. In the window, click “Choose Folder…”, "
+                + "check the chosen .exe, then click “Add Game”.")
             XCTAssertEqual(hint.target, .libraryAddFolder)
-            XCTAssertEqual(hint.help?.tips, ["Кнопка «Добавить игру» серая, пока не выбран .exe-файл игры."])
+            XCTAssertEqual(hint.help?.tips, ["“Add Game” stays grey until the game's .exe file is chosen."])
 
             // "Back" returns to the question, and the other answer can be given.
             steam.handle(.back)
@@ -341,18 +341,18 @@ final class SetupTourTests: XCTestCase {
     /// In a Library that already has cards the two buttons are in the "+"
     /// menu, which cannot be outlined: the hint says where it is.
     func testWithoutTheLargeButtonsTheHintPointsAtThePlusMenu() throws {
-        try russian {
+        try english {
             let facts = LearningFixture.newcomer.with { $0.libraryShowsAddButtons = false }
             var tour = try tour(.game, facts)
             XCTAssertNil(try shown(tour).target)
             tour.handle(.choose(.steam))
             XCTAssertNil(try shown(tour).target)
-            XCTAssertEqual(try shown(tour).text, "Нажмите «+» вверху справа → «Добавить игру Steam…». "
-                + "В окне выберите свою игру; если её нет в списке — «Другая игра». Затем «Далее».")
+            XCTAssertEqual(try shown(tour).text, "Click “+” at the top right, then “Add Steam Game…”. "
+                + "In the window, pick your game; if it is not listed, pick “Another game”. Then click “Next”.")
             tour.handle(.back)
             tour.handle(.choose(.folder))
-            XCTAssertEqual(try shown(tour).text, "Нажмите «+» вверху справа → «Добавить игру из папки…». "
-                + "В окне — «Выбрать папку…», проверьте выбранный .exe, затем «Добавить игру».")
+            XCTAssertEqual(try shown(tour).text, "Click “+” at the top right, then “Add Game from Folder…”. "
+                + "In the window, click “Choose Folder…”, check the chosen .exe, then click “Add Game”.")
         }
     }
 
@@ -377,7 +377,7 @@ final class SetupTourTests: XCTestCase {
     }
 
     func testTheSteamWayToTheEnd() throws {
-        try russian {
+        try english {
             var tour = try tour(.game, LearningFixture.newcomer)
             tour.handle(.choose(.steam))
             // The wizard opens, Steam starts, the wizard is closed mid-download.
@@ -390,9 +390,9 @@ final class SetupTourTests: XCTestCase {
             XCTAssertEqual(tour.phase, .step(.gameWait))
             XCTAssertTrue(tour.waitsForGame)
             var hint = try shown(tour)
-            XCTAssertEqual(hint.label, "Игра · шаг 3 из 5")
-            XCTAssertEqual(hint.text, "Не останавливайте Steam и не закрывайте TrailBridge — загрузка "
-                + "оборвётся. Глава продолжится, когда у игры появится «Играть»; мастер можно открыть снова.")
+            XCTAssertEqual(hint.label, "Game · step 3 of 5")
+            XCTAssertEqual(hint.text, "Do not stop Steam or quit TrailBridge: the download would break off. "
+                + "The chapter goes on when the game gets “Play”; you can open the wizard again.")
             XCTAssertNil(hint.target)
             XCTAssertNil(hint.section)
             XCTAssertEqual(hint.buttons, [.back, .help])
@@ -408,18 +408,18 @@ final class SetupTourTests: XCTestCase {
             XCTAssertEqual(tour.phase, .step(.gameStopSteam))
             XCTAssertFalse(tour.waitsForGame)
             hint = try shown(tour)
-            XCTAssertEqual(hint.label, "Игра · шаг 4 из 5")
-            XCTAssertEqual(hint.text, "Игра добавлена. Steam ещё открыт, поэтому «Играть» недоступна. "
-                + "Если игра уже скачана, нажмите «Остановить» в боковой панели.")
+            XCTAssertEqual(hint.label, "Game · step 4 of 5")
+            XCTAssertEqual(hint.text, "The game is added. Steam is still open, so “Play” is not available. "
+                + "If the game has finished downloading, click “Stop” in the sidebar.")
             XCTAssertEqual(hint.target, .sidebarStop)
 
             // Steam is stopped: the OpenVR label is next.
             feed(&tour) { $0.session = .idle }
             XCTAssertEqual(tour.phase, .step(.gameOpenVR))
             hint = try shown(tour)
-            XCTAssertEqual(hint.label, "Игра · шаг 5 из 5")
-            XCTAssertEqual(hint.text, "У игры метка «Настроить OpenVR». Нажмите её и включите "
-                + "«Поддержка OpenVR»; если спросит — «Скачать и включить». Затем «Готово».")
+            XCTAssertEqual(hint.label, "Game · step 5 of 5")
+            XCTAssertEqual(hint.text, "The game is marked “SET UP OPENVR”. Click that label and turn on "
+                + "“OpenVR support”; if asked, click “Download and turn on”. Then click “Done”.")
             XCTAssertEqual(hint.target, .libraryStatusChip(self.game))
             XCTAssertEqual(hint.section, .library)
             XCTAssertEqual(hint.buttons, [.back, .help])
@@ -433,10 +433,10 @@ final class SetupTourTests: XCTestCase {
             XCTAssertEqual(tour.phase, .finished)
             XCTAssertTrue(tour.isCompleted)
             hint = try shown(tour)
-            XCTAssertEqual(hint.label, "Игра")
-            XCTAssertEqual(hint.text, "Глава «Игра» готова. Дальше — «Шлем».")
+            XCTAssertEqual(hint.label, "Game")
+            XCTAssertEqual(hint.text, "The “Game” chapter is done. Next: “Headset”.")
             XCTAssertEqual(hint.buttons, [.continueTo(.headset), .later])
-            XCTAssertEqual(hint.buttons.map(hint.title(of:)), ["Дальше", "Позже"])
+            XCTAssertEqual(hint.buttons.map(hint.title(of:)), ["Go On", "Later"])
             XCTAssertEqual(hint.primaryButton, .continueTo(.headset))
         }
     }
@@ -535,7 +535,7 @@ final class SetupTourTests: XCTestCase {
     }
 
     func testTheFolderWayWaitsForTheCopy() throws {
-        try russian {
+        try english {
             var tour = try tour(.game, LearningFixture.newcomer)
             tour.handle(.choose(.folder))
             feed(&tour) { $0.pageSheetOpen = true }
@@ -544,7 +544,7 @@ final class SetupTourTests: XCTestCase {
             feed(&tour) { $0.pageSheetOpen = false }
             XCTAssertEqual(tour.phase, .step(.gameWait))
             XCTAssertEqual(try shown(tour).text,
-                           "Игра копируется. Глава продолжится, когда у игры появится «Играть».")
+                           "The game is being copied. The chapter goes on when the game gets “Play”.")
             feed(&tour) {
                 $0.importRunning = false
                 $0.launchableGames = [self.game]
@@ -555,7 +555,7 @@ final class SetupTourTests: XCTestCase {
     }
 
     func testTheFactsSuggestTheWayFirst() throws {
-        try russian {
+        try english {
             let card = LearningLibraryGame(id: "steam-1", name: "Blood Trail")
             var tour = try tour(.game, LearningFixture.newcomer.with {
                 $0.libraryShowsAddButtons = false
@@ -563,13 +563,13 @@ final class SetupTourTests: XCTestCase {
             })
             XCTAssertEqual(tour.phase, .step(.gameCreateProfile))
             var hint = try shown(tour)
-            XCTAssertEqual(hint.label, "Игра · шаг 1 из 5")
-            XCTAssertEqual(hint.text, "Игра «Blood Trail» уже здесь. Нажмите «Создать профиль» "
-                + "на её карточке — появится «Играть».")
+            XCTAssertEqual(hint.label, "Game · step 1 of 5")
+            XCTAssertEqual(hint.text, "“Blood Trail” is already here. Click “Create Profile” "
+                + "on its card: “Play” will appear.")
             XCTAssertEqual(hint.target, .libraryGameAction("steam-1"))
             XCTAssertEqual(hint.buttons, [.help])
             XCTAssertEqual(hint.help?.options, [.otherWay])
-            XCTAssertEqual(hint.help.map { hint.title(of: $0.options[0]) }, "Добавить другую игру")
+            XCTAssertEqual(hint.help.map { hint.title(of: $0.options[0]) }, "Add Another Game")
             // The profile appears: the chapter ends.
             feed(&tour) {
                 $0.steamGameWithoutProfile = nil
@@ -586,8 +586,8 @@ final class SetupTourTests: XCTestCase {
             })
             XCTAssertEqual(copy.phase, .step(.gameCopy))
             hint = try shown(copy)
-            XCTAssertEqual(hint.text, "Игра «Beat Saber» стоит в Whisky. Нажмите «Скопировать в "
-                + "TrailBridge…» на её карточке.")
+            XCTAssertEqual(hint.text, "“Beat Saber” is installed in Whisky. "
+                + "Click “Copy into Basalt…” on its card.")
             XCTAssertEqual(hint.target, .libraryGameAction("whisky-7"))
             feed(&copy) { $0.pageSheetOpen = true }
             feed(&copy) {
@@ -774,26 +774,26 @@ final class SetupTourTests: XCTestCase {
     // MARK: - Chapter 4: First launch
 
     func testFirstLaunchWithTheMacsOwnAudioAsksForSystemAudio() throws {
-        try russian {
+        try english {
             let tour = try tour(.firstLaunch, LearningFixture.withGame.with {
                 $0.gameAudioOn = true
                 $0.gameAudioMac = true
             })
             XCTAssertEqual(tour.phase, .step(.launchMicrophone))
             XCTAssertEqual(try shown(tour).text,
-                "Если macOS спросит разрешение на запись системного звука — нажмите «Разрешить»: "
-                + "так звук игры попадёт в шлем. Если игра попросит микрофон, это тоже можно разрешить.")
+                "If macOS asks to record system audio, click “Allow”: that is how the game's sound "
+                + "gets to the headset. If the game asks for the microphone, you can allow it too.")
         }
     }
 
     func testFirstLaunchSaysTheMicrophoneSentenceThenHandsOver() throws {
-        try russian {
+        try english {
             var tour = try tour(.firstLaunch, LearningFixture.withGame.with { $0.gameAudioOn = true })
             XCTAssertEqual(tour.phase, .step(.launchMicrophone))
             let hint = try shown(tour)
-            XCTAssertEqual(hint.label, "Первый запуск")
-            XCTAssertEqual(hint.text, "Если macOS спросит доступ к микрофону — нажмите «Разрешить»: "
-                + "так звук игры попадёт в шлем.")
+            XCTAssertEqual(hint.label, "First Launch")
+            XCTAssertEqual(hint.text, "If macOS asks for access to the microphone, click “Allow”: "
+                + "that is how the game's sound gets to the headset.")
             XCTAssertNil(hint.target)
             XCTAssertNil(hint.section)
             XCTAssertEqual(hint.buttons, [.next])
@@ -820,12 +820,13 @@ final class SetupTourTests: XCTestCase {
     }
 
     func testLaunchOptionsWalkTheSixSteps() throws {
-        try russian {
+        try english {
             var tour = try tour(.launchOptions, optionsFacts)
             XCTAssertEqual(tour.phase, .step(.optionsLibrary))
             var hint = try shown(tour)
-            XCTAssertEqual(hint.label, "Варианты запуска · шаг 1 из 6")
-            XCTAssertEqual(hint.text, "Играть можно и отсюда: у каждой игры своя карточка с кнопкой «Играть».")
+            XCTAssertEqual(hint.label, "Launch Options · step 1 of 6")
+            XCTAssertEqual(hint.text, "You can play from here too: every game has its own card "
+                + "with a “Play” button.")
             // The whole card, not its Play button: nothing is to be pressed.
             XCTAssertEqual(hint.target, .libraryGameTile(self.game))
             XCTAssertEqual(hint.section, .library)
@@ -834,14 +835,14 @@ final class SetupTourTests: XCTestCase {
             tour.handle(.next)
             XCTAssertEqual(tour.phase, .step(.optionsStream))
             hint = try shown(tour)
-            XCTAssertEqual(hint.label, "Варианты запуска · шаг 2 из 6")
-            XCTAssertEqual(hint.text, "Второе место запуска — здесь: список «Игра» и «Играть». "
-                + "Теперь нажмите «Изменить…» → «Общие настройки трансляции…».")
+            XCTAssertEqual(hint.label, "Launch Options · step 2 of 6")
+            XCTAssertEqual(hint.text, "The second place to start is here: the “Game” list and “Play”. "
+                + "Now click “Change…”, then “Global Stream Settings…”.")
             XCTAssertEqual(hint.target, .streamAdjust)
             XCTAssertEqual(hint.section, .stream)
             XCTAssertEqual(hint.buttons, [.back, .help])
             XCTAssertEqual(hint.help?.tips, [
-                "Кнопка «Изменить…» недоступна, пока идёт сеанс или открыт Steam. Нажмите «Остановить».",
+                "“Change…” is not available while a session runs or Steam is open. Click “Stop”.",
             ])
             // No "Next" here: the step counts itself.
             tour.handle(.next)
@@ -852,25 +853,25 @@ final class SetupTourTests: XCTestCase {
 
             XCTAssertEqual(tour.phase, .step(.optionsConnection))
             hint = try shown(tour)
-            XCTAssertEqual(hint.label, "Варианты запуска · шаг 3 из 6")
-            XCTAssertEqual(hint.text, "Это «Подключение»: выберите своё. Сейчас — «USB-кабель»: "
-                + "шлем на проводе, ALVR откроется сам после «Играть».")
+            XCTAssertEqual(hint.label, "Launch Options · step 3 of 6")
+            XCTAssertEqual(hint.text, "This is “Connection”: choose yours. Now it is “USB Cable”: "
+                + "the headset is on the cable, and ALVR opens by itself after “Play”.")
             XCTAssertEqual(hint.target, .settingsConnection)
             XCTAssertNil(hint.section)
             XCTAssertEqual(hint.buttons, [.back, .next])
             // The text follows the switch; the step stays.
             feed(&tour) { $0.connection = .wifi }
             XCTAssertEqual(tour.phase, .step(.optionsConnection))
-            XCTAssertEqual(try shown(tour).text, "Это «Подключение»: выберите своё. Сейчас — «Wi‑Fi»: "
-                + "Mac и шлем в одной сети; сначала откройте ALVR в шлеме, потом «Играть».")
+            XCTAssertEqual(try shown(tour).text, "This is “Connection”: choose yours. Now it is “Wi-Fi”: "
+                + "the Mac and the headset are on one network; open ALVR in the headset first, then click “Play”.")
             XCTAssertEqual(try shown(tour).id, hint.id)
 
             tour.handle(.next)
             XCTAssertEqual(tour.phase, .step(.optionsRecommended))
             hint = try shown(tour)
-            XCTAssertEqual(hint.label, "Варианты запуска · шаг 4 из 6")
-            XCTAssertEqual(hint.text, "Не знаете, какое качество выбрать? Нажмите «Использовать "
-                + "рекомендуемое». Свои значения можно оставить.")
+            XCTAssertEqual(hint.label, "Launch Options · step 4 of 6")
+            XCTAssertEqual(hint.text, "Not sure which quality to choose? Click “Use recommended”. "
+                + "You can also keep your own values.")
             XCTAssertEqual(hint.target, .settingsUseRecommended)
             XCTAssertEqual(hint.buttons, [.back, .next])
             // Pressed: the step counts itself.
@@ -878,25 +879,25 @@ final class SetupTourTests: XCTestCase {
 
             XCTAssertEqual(tour.phase, .step(.optionsOwnSettings))
             hint = try shown(tour)
-            XCTAssertEqual(hint.label, "Варианты запуска · шаг 5 из 6")
-            XCTAssertEqual(hint.text, "У игры могут быть свои настройки: «Изменить…» → "
-                + "«Настройки трансляции для …».")
+            XCTAssertEqual(hint.label, "Launch Options · step 5 of 6")
+            XCTAssertEqual(hint.text, "A game can have its own settings: “Change…”, then "
+                + "“Stream Settings for …”.")
             XCTAssertEqual(hint.target, .streamAdjust)
             XCTAssertEqual(hint.section, .stream)
             XCTAssertEqual(hint.buttons, [.back, .next])
             // The details are a quiet link, not a third button.
-            XCTAssertEqual(hint.help?.title, "Не получается?")
+            XCTAssertEqual(hint.help?.title, "Not working?")
             XCTAssertEqual(hint.help?.tips, [
-                "В том окне «Сохранить» делает игре отдельную копию: общие настройки, "
-                    + "и «Подключение» тоже, на неё больше не действуют.",
-                "Вернуть общие — «Использовать общие» в том же окне.",
+                "In that window, “Save” gives the game its own copy: the shared settings, "
+                    + "“Connection” included, no longer apply to it.",
+                "“Use global” in the same window brings the shared settings back.",
             ])
 
             tour.handle(.next)
             XCTAssertEqual(tour.phase, .step(.optionsHistory))
             hint = try shown(tour)
-            XCTAssertEqual(hint.label, "Варианты запуска · шаг 6 из 6")
-            XCTAssertEqual(hint.text, "Здесь ваши прошлые игры; ▶ в строке запускает ту же игру снова.")
+            XCTAssertEqual(hint.label, "Launch Options · step 6 of 6")
+            XCTAssertEqual(hint.text, "Your past sessions are here; ▶ in a row starts the same game again.")
             XCTAssertEqual(hint.target, .streamRecentSessions)
             XCTAssertEqual(hint.buttons, [.back, .next])
             XCTAssertFalse(tour.isCompleted)
@@ -906,9 +907,9 @@ final class SetupTourTests: XCTestCase {
             XCTAssertTrue(tour.isCompleted)
             hint = try shown(tour)
             // Every other chapter is done: nothing is next.
-            XCTAssertEqual(hint.text, "Глава «Варианты запуска» готова.")
+            XCTAssertEqual(hint.text, "The “Launch Options” chapter is done.")
             XCTAssertEqual(hint.buttons, [.done])
-            XCTAssertEqual(hint.title(of: .done), "Готово")
+            XCTAssertEqual(hint.title(of: .done), "Done")
             XCTAssertEqual(hint.primaryButton, .done)
             tour.handle(.next)
             XCTAssertEqual(tour.phase, .closed)
@@ -935,11 +936,11 @@ final class SetupTourTests: XCTestCase {
     }
 
     func testARecommendedPresetAlreadySelectedIsSaidAndNotSkipped() throws {
-        try russian {
+        try english {
             var tour = try tour(.launchOptions, LearningFixture.returning, resumeAt: "optionsRecommended")
             XCTAssertEqual(tour.phase, .step(.optionsRecommended))
-            XCTAssertEqual(try shown(tour).text, "Качество: рекомендуемое для этого Mac уже выбрано. "
-                + "Вернуть его всегда можно кнопкой «Использовать рекомендуемое».")
+            XCTAssertEqual(try shown(tour).text, "Quality: the one recommended for this Mac is already selected. "
+                + "“Use recommended” always brings it back.")
             XCTAssertEqual(try shown(tour).buttons, [.back, .next])
             // Nothing to wait for: facts do not move it.
             feed(&tour) { $0.appBusy = true }
@@ -961,15 +962,15 @@ final class SetupTourTests: XCTestCase {
     /// A game with its own stream settings: the switch just shown does not
     /// apply to it, and the next card says where its switch is.
     func testAGameWithItsOwnSettingsGetsItsOwnCard() throws {
-        try russian {
+        try english {
             let facts = optionsFacts.with { $0.gameWithOwnSettings = self.game }
             var tour = try tour(.launchOptions, facts, resumeAt: "optionsConnection")
             tour.handle(.next)
             XCTAssertEqual(tour.phase, .step(.optionsOwnConnection))
             let hint = try shown(tour)
-            XCTAssertEqual(hint.label, "Варианты запуска · шаг 3 из 6")
-            XCTAssertEqual(hint.text, "У игры «BRUTALISTICK VR» свои настройки — подключение для неё "
-                + "меняется в «Изменить…» → «Настройки трансляции для …».")
+            XCTAssertEqual(hint.label, "Launch Options · step 3 of 6")
+            XCTAssertEqual(hint.text, "“BRUTALISTICK VR” has its own settings: its connection is changed "
+                + "in “Change…”, then “Stream Settings for …”.")
             XCTAssertNil(hint.target)
             XCTAssertEqual(hint.buttons, [.back, .next])
             tour.handle(.next)
@@ -990,14 +991,14 @@ final class SetupTourTests: XCTestCase {
     }
 
     func testSteamOpenComesFirstInLaunchOptions() throws {
-        try russian {
+        try english {
             var tour = try tour(.launchOptions, optionsFacts.with { $0.session = .windowsApp })
             XCTAssertEqual(tour.phase, .step(.optionsStop))
             let hint = try shown(tour)
             // A card outside the count.
-            XCTAssertEqual(hint.label, "Варианты запуска")
-            XCTAssertEqual(hint.text, "Сейчас открыт Steam, поэтому «Изменить…» недоступна. "
-                + "Если Steam ничего не скачивает, нажмите «Остановить» в боковой панели.")
+            XCTAssertEqual(hint.label, "Launch Options")
+            XCTAssertEqual(hint.text, "Steam is open, so “Change…” is not available. "
+                + "If Steam is not downloading anything, click “Stop” in the sidebar.")
             XCTAssertEqual(hint.target, .sidebarStop)
             XCTAssertNil(hint.section)
             XCTAssertEqual(hint.buttons, [.help])
@@ -1060,12 +1061,12 @@ final class SetupTourTests: XCTestCase {
     }
 
     func testTheHistoryStepSpeaksOfWhatIsThere() throws {
-        try russian {
+        try english {
             let empty = optionsFacts.with {
                 $0.sessionHistory = []
             }
             XCTAssertEqual(try shown(try tour(.launchOptions, empty, resumeAt: "optionsHistory")).text,
-                           "Здесь появятся ваши игры после первого сеанса; ▶ в строке запустит ту же игру снова.")
+                           "Your sessions will show here after the first one; ▶ in a row starts the same game again.")
         }
     }
 
@@ -1120,20 +1121,20 @@ final class SetupTourTests: XCTestCase {
     }
 
     func testTheEndLineNamesTheNextChapterAndClosesOnAnyAnswer() throws {
-        try russian {
+        try english {
             // Mac just turned ready for a new person: the headset is next.
             var mac = try tour(.mac, LearningFixture.unbuiltMac)
             feed(&mac) { $0.setupChecks = LearningFixture.checks() }
             var hint = try shown(mac)
             XCTAssertEqual(hint.id, "setup-mac-end")
-            XCTAssertEqual(hint.text, "Глава «Mac» готова. Дальше — «Шлем».")
+            XCTAssertEqual(hint.text, "The “Mac” chapter is done. Next: “Headset”.")
             XCTAssertEqual(hint.buttons, [.continueTo(.headset), .later])
             XCTAssertNil(hint.target)
             XCTAssertNil(hint.section)
             // With ALVR on the headset the Mac sees over USB, the game is next.
             feed(&mac, LearningFixture.headsetReady)
             hint = try shown(mac)
-            XCTAssertEqual(hint.text, "Глава «Mac» готова. Дальше — «Игра».")
+            XCTAssertEqual(hint.text, "The “Mac” chapter is done. Next: “Game”.")
             XCTAssertEqual(hint.buttons, [.continueTo(.game), .later])
 
             for button in hint.buttons {
@@ -1227,44 +1228,44 @@ final class SetupTourTests: XCTestCase {
     /// only in another state there is no outline, and the text says where
     /// the control appears.
     func testAReviewNeverOutlinesAControlThatIsNotThere() throws {
-        try russian {
+        try english {
             var mac = try tour(.mac, .review, LearningFixture.returning)
             var hint = try shown(mac)
-            XCTAssertEqual(hint.label, "Mac · обзор, шаг 1 из 1")
-            XCTAssertEqual(hint.text, "Здесь видно, готов ли Mac. Сейчас всё на месте, "
-                + "поэтому кнопки «Инструкция по сборке» нет.")
+            XCTAssertEqual(hint.label, "Mac · review, step 1 of 1")
+            XCTAssertEqual(hint.text, "This shows whether the Mac is ready. Everything is in place now, "
+                + "so there is no “Build instructions” button.")
             XCTAssertEqual(hint.target, .setupSummary)
             mac.handle(.next)
-            XCTAssertEqual(try shown(mac).text, "Глава «Mac» готова. Дальше — «Варианты запуска».")
+            XCTAssertEqual(try shown(mac).text, "The “Mac” chapter is done. Next: “Launch Options”.")
 
             var game = try self.tour(.game, .review, LearningFixture.returning)
             hint = try shown(game)
-            XCTAssertEqual(hint.label, "Игра · обзор, шаг 1 из 6")
-            XCTAssertEqual(hint.text, "Игру добавляет «+» вверху справа: «Добавить игру Steam…» или "
-                + "«Добавить игру из папки…». Две большие кнопки видны здесь, только пока игр нет.")
+            XCTAssertEqual(hint.label, "Game · review, step 1 of 6")
+            XCTAssertEqual(hint.text, "“+” at the top right adds a game: “Add Steam Game…” or "
+                + "“Add Game from Folder…”. The two large buttons show here only while there are no games.")
             XCTAssertNil(hint.target)
-            XCTAssertEqual(hint.help?.title, "Другие способы")
+            XCTAssertEqual(hint.help?.title, "Other Ways")
             game.handle(.next)
             hint = try shown(game)
-            XCTAssertEqual(hint.text, "В окне «Добавить игру Steam» выберите свою игру; "
-                + "если её нет в списке — «Другая игра». Затем «Далее».")
+            XCTAssertEqual(hint.text, "In “Add Steam Game”, pick your game; "
+                + "if it is not listed, pick “Another game”. Then click “Next”.")
             XCTAssertNil(hint.target)
             XCTAssertNil(hint.help)
             game.handle(.next)
             hint = try shown(game)
-            XCTAssertEqual(hint.text, "В окне «Добавить игру из папки» — «Выбрать папку…», "
-                + "проверьте выбранный .exe, затем «Добавить игру».")
+            XCTAssertEqual(hint.text, "In “Add Game from Folder”, click “Choose Folder…”, "
+                + "check the chosen .exe, then click “Add Game”.")
             XCTAssertNil(hint.target)
             game.handle(.next)
             hint = try shown(game)
-            XCTAssertEqual(hint.text, "Пока Steam скачивает игру, не останавливайте Steam "
-                + "и не закрывайте TrailBridge — загрузка оборвётся.")
+            XCTAssertEqual(hint.text, "While Steam downloads a game, do not stop Steam "
+                + "or quit TrailBridge: the download would break off.")
             XCTAssertNil(hint.target)
             game.handle(.next)
             hint = try shown(game)
-            XCTAssertEqual(hint.label, "Игра · обзор, шаг 5 из 6")
-            XCTAssertEqual(hint.text, "Пока открыт Steam, «Играть» недоступна. Кнопка «Остановить» "
-                + "появляется в боковой панели, только пока он открыт.")
+            XCTAssertEqual(hint.label, "Game · review, step 5 of 6")
+            XCTAssertEqual(hint.text, "While Steam is open, “Play” is not available. “Stop” "
+                + "shows in the sidebar only while it is open.")
             // "Stop" is in the sidebar only while Steam is open.
             XCTAssertNil(hint.target)
             feed(&game) { $0.session = .windowsApp }
@@ -1274,14 +1275,14 @@ final class SetupTourTests: XCTestCase {
             hint = try shown(game)
             // The label is on the card in every state; the text follows it.
             XCTAssertEqual(hint.target, .libraryStatusChip(self.game))
-            XCTAssertEqual(hint.text, "Метка «Готово · OpenVR»: плагин OpenVR включён. "
-                + "Нажмите метку, если его нужно выключить.")
+            XCTAssertEqual(hint.text, "The “READY · OPENVR” label: the OpenVR plug-in is on. "
+                + "Click the label to turn it off.")
             feed(&game) { $0.openVRBadges = [self.game: .none] }
-            XCTAssertEqual(try shown(game).text, "У этой игры метка «Готово к запуску»: плагин OpenVR "
-                + "ей не нужен. У других игр здесь бывает «Настроить OpenVR».")
+            XCTAssertEqual(try shown(game).text, "This game is marked “READY”: it needs no OpenVR plug-in. "
+                + "Other games may show “SET UP OPENVR” here.")
             feed(&game) { $0.openVRBadges = [self.game: .needsSetup] }
-            XCTAssertEqual(try shown(game).text, "У игры метка «Настроить OpenVR». Нажмите её и включите "
-                + "«Поддержка OpenVR»; если спросит — «Скачать и включить». Затем «Готово».")
+            XCTAssertEqual(try shown(game).text, "The game is marked “SET UP OPENVR”. Click that label and turn on "
+                + "“OpenVR support”; if asked, click “Download and turn on”. Then click “Done”.")
             // Still a review: the label turning ready moves nothing.
             feed(&game) { $0.openVRBadges = [self.game: .installed] }
             XCTAssertEqual(game.phase, .step(.gameOpenVR))
@@ -1289,9 +1290,9 @@ final class SetupTourTests: XCTestCase {
             var options = try self.tour(.launchOptions, .review, LearningFixture.returning)
             options.handle(.next)
             hint = try shown(options)
-            XCTAssertEqual(hint.label, "Варианты запуска · обзор, шаг 2 из 6")
-            XCTAssertEqual(hint.text, "Второе место запуска — здесь: список «Игра» и «Играть». "
-                + "«Изменить…» → «Общие настройки трансляции…» открывает настройки.")
+            XCTAssertEqual(hint.label, "Launch Options · review, step 2 of 6")
+            XCTAssertEqual(hint.text, "The second place to start is here: the “Game” list and “Play”. "
+                + "“Change…”, then “Global Stream Settings…” opens the settings.")
             XCTAssertEqual(hint.target, .streamAdjust)
         }
     }

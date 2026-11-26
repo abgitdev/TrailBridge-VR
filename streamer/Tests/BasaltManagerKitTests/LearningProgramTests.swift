@@ -8,10 +8,10 @@ final class LearningProgramTests: XCTestCase {
         LearningProgram(facts).rows.map(\.status)
     }
 
-    private func russian(_ body: () throws -> Void) rethrows {
+    private func withEnglish(_ body: () throws -> Void) rethrows {
         let previous = L10n.language
         defer { L10n.language = previous }
-        L10n.language = .ru
+        L10n.language = .en
         try body()
     }
 
@@ -104,9 +104,9 @@ final class LearningProgramTests: XCTestCase {
         XCTAssertNil(program.row(.game)?.action)
         XCTAssertNil(program.row(.firstLaunch)?.action)
         XCTAssertEqual(program.nextChapter, .mac)
-        russian {
-            XCTAssertEqual(program.row(.game)?.statusText, "Сначала: Mac")
-            XCTAssertEqual(program.row(.launchOptions)?.statusText, "Сначала: Игра")
+        withEnglish {
+            XCTAssertEqual(program.row(.game)?.statusText, "First: Mac")
+            XCTAssertEqual(program.row(.launchOptions)?.statusText, "First: Game")
         }
     }
 
@@ -191,10 +191,10 @@ final class LearningProgramTests: XCTestCase {
             XCTAssertEqual(LearningProgram(facts).row(.headset)?.status, .done)
             XCTAssertEqual(LearningProgram(facts).row(.headset)?.action, .review)
         }
-        russian {
+        withEnglish {
             XCTAssertEqual(LearningProgram(paused.with {
                 $0.chapters[.headset].pausedStep = SetupTour.Step.headsetDebugging.rawValue
-            }).row(.headset)?.statusText, "Шаг 5 из 7")
+            }).row(.headset)?.statusText, "Step 5 of 7")
         }
     }
 
@@ -230,9 +230,9 @@ final class LearningProgramTests: XCTestCase {
         let row = LearningProgram(facts).row(.launchOptions)
         XCTAssertEqual(row?.status, .paused(step: 3, of: 6))
         XCTAssertEqual(row?.action, .resume)
-        russian {
-            XCTAssertEqual(row?.statusText, "Шаг 3 из 6")
-            XCTAssertEqual(row?.action?.title, "Продолжить")
+        withEnglish {
+            XCTAssertEqual(row?.statusText, "Step 3 of 6")
+            XCTAssertEqual(row?.action?.title, "Continue")
         }
 
         var game = LearningFixture.newcomer
@@ -331,45 +331,45 @@ final class LearningProgramTests: XCTestCase {
     func testRowButtons() {
         let page = LearningPage(LearningFixture.withGame.with { $0.firstRunAnswered = true })
         XCTAssertEqual(page.rows.map(\.action), [.review, .start, .review, .start, .start])
-        russian {
+        withEnglish {
             XCTAssertEqual(page.rows.compactMap(\.action).map(\.title),
-                           ["Повторить", "Начать", "Повторить", "Начать", "Начать"])
+                           ["Review", "Start", "Review", "Start", "Start"])
             // A section without a chapter of its own would be opened so.
-            XCTAssertEqual(LearningProgramRow.Action.open(.headset).title, "Открыть «Шлем»")
+            XCTAssertEqual(LearningProgramRow.Action.open(.headset).title, "Open “Headset”")
         }
     }
 
-    func testRussianTexts() {
-        russian {
+    func testEnglishTexts() {
+        withEnglish {
             let page = LearningPage(LearningFixture.returning)
             XCTAssertEqual(page.rows.map(\.title),
-                           ["Mac", "Шлем", "Игра", "Первый запуск", "Варианты запуска"])
+                           ["Mac", "Headset", "Game", "First Launch", "Launch Options"])
             XCTAssertEqual(page.rows.map(\.purpose), [
-                "Проверим, что на этом Mac есть всё для VR.",
-                "Поставим на шлем приложение ALVR. Один раз, по кабелю.",
-                "Добавим игру: из Steam или из папки.",
-                "Запустим игру и увидим её в шлеме.",
-                "Где ещё есть «Играть», кабель или Wi‑Fi, качество.",
+                "Check that this Mac has everything for VR.",
+                "Put the ALVR app on the headset. Once, over the cable.",
+                "Add a game: from Steam or from a folder.",
+                "Start the game and see it in the headset.",
+                "Where else “Play” is, cable or Wi-Fi, quality.",
             ])
             XCTAssertEqual(page.rows.map(\.statusText),
-                           ["Готово", "Готово", "Готово", "Готово", "Не начато"])
-            XCTAssertEqual(page.summary, "Пройдено 4 из 5")
-            XCTAssertEqual(LearningPage.showTitle, "Показать")
-            XCTAssertEqual(LearningPage.hideTitle, "Скрыть")
+                           ["Done", "Done", "Done", "Done", "Not started"])
+            XCTAssertEqual(page.summary, "4 of 5 done")
+            XCTAssertEqual(LearningPage.showTitle, "Show")
+            XCTAssertEqual(LearningPage.hideTitle, "Hide")
             XCTAssertEqual(LearningPage.intro, [
-                "TrailBridge запускает VR-игры для Windows на этом Mac и показывает их в Quest 3.",
-                "На шлем ставится приложение ALVR — оно принимает картинку.",
-                "Игры, проверенные в шлеме, отмечены в списке при добавлении игры из Steam, другие могут не заработать.",
+                "TrailBridge runs Windows VR games on this Mac and shows them in a Quest 3.",
+                "The ALVR app goes on the headset: it receives the picture.",
+                "Games tested in the headset are marked in the list when you add a Steam game. Others may not work.",
             ])
-            XCTAssertEqual(LearningPage.scheme, ["Mac", "кабель или Wi‑Fi", "Quest 3"])
-            XCTAssertEqual(LearningPage.needsTitle, "Понадобится")
+            XCTAssertEqual(LearningPage.scheme, ["Mac", "cable or Wi-Fi", "Quest 3"])
+            XCTAssertEqual(LearningPage.needsTitle, "You Will Need")
             XCTAssertEqual(LearningPage.needs, [
-                "Кабель USB‑C для передачи данных",
-                "Телефон с приложением Meta Horizon",
-                "Взрослый с аккаунтом Meta",
-                "Логин Steam и телефон для Steam Guard",
-                "Место на диске: на этом Mac, внешнем диске или в сетевом хранилище — папка выбирается в «Настройках»",
-                "Время на загрузку игры",
+                "A USB-C cable that carries data",
+                "A phone with the Meta Horizon app",
+                "An adult with a Meta account",
+                "Your Steam sign-in, and the phone for Steam Guard",
+                "Disk space: on this Mac, an external disk or network storage, as you choose in Settings",
+                "Time for the game to download",
             ])
         }
     }

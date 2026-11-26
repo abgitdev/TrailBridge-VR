@@ -3,20 +3,8 @@ import Foundation
 public enum AppLanguage: String, CaseIterable, Codable, Sendable {
     case en, ru, it, de, es, fr, uk, pl, ko, ja
 
-    public var nativeName: String {
-        switch self {
-        case .en: return "English"
-        case .ru: return "Русский"
-        case .it: return "Italiano"
-        case .de: return "Deutsch"
-        case .es: return "Español"
-        case .fr: return "Français"
-        case .uk: return "Українська"
-        case .pl: return "Polski"
-        case .ko: return "한국어"
-        case .ja: return "日本語"
-        }
-    }
+    /// The language's own name, as its table spells it: "Deutsch", "日本語".
+    public var nativeName: String { L10n.string(.languageNativeName, language: self) }
 
     public var isReviewed: Bool { self == .en || self == .ru }
     public var locale: Locale { Locale(identifier: rawValue) }

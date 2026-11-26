@@ -57,8 +57,7 @@ enum LearningFixture {
 
     /// What the developer wrapper says when it has no adb to run, as the
     /// Headset page reports it.
-    static let wrapperWithoutADB = "Headset command failed: \(AlvrWiredFailure.adbMissing) "
-        + "In Russian the button is «Скачать Android Platform Tools…».\n"
+    static let wrapperWithoutADB = "Headset command failed: \(AlvrWiredFailure.adbMissing)\n"
 
     /// A new person on a Mac where nothing is built yet.
     static var unbuiltMac: LearningFacts {

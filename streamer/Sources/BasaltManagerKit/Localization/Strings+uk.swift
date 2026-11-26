@@ -609,6 +609,7 @@ final class StringsUK: LocalizationTable {
         .licensesTitle: "Ліцензії",
         .licensesMissing: "Текст ліцензії не знайдено в цій збірці.",
         // MARK: - Settings language
+        .languageNativeName: "Українська",
         .settingsLanguage: "Мова",
         .settingsLanguageImmediate: "Мова змінюється одразу.",
         .settingsTranslationNotReviewed: "переклад не перевірено",

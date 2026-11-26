@@ -218,9 +218,11 @@ final class GameFolderScanTests: XCTestCase {
         L10n.language = .en
         XCTAssertEqual(
             GameFolderRefusal.unsupportedEntries(examples: ["Data/link", "pipe"], count: 7).message,
-            "The folder contains items that cannot be copied safely, such as symbolic links or special files (7 in all): Data/link, pipe")
+            "The folder contains items that cannot be copied safely, such as symbolic links or special "
+            + "files (7 in all): Data/link, pipe")
         XCTAssertEqual(GameFolderRefusal.caseConflicts(examples: ["data", "Data"], count: 1).message,
-                       "The folder contains names that differ only in letter case, which Windows cannot tell apart: data, Data")
+                       "The folder contains names that differ only in letter case, which Windows cannot "
+                       + "tell apart: data, Data")
         XCTAssertEqual(GameFolderRefusal.tooManyEntries(limit: 100_000).message,
                        "The folder holds more than 100,000 files and folders. Choose the game’s own folder.")
         XCTAssertEqual(GameFolderRefusal.noExecutable.message, L10n.string(.folderImportNoExecutable))
@@ -236,10 +238,12 @@ final class GameFolderScanTests: XCTestCase {
         L10n.language = .ru
         let limit = 100_000.formatted(.number.locale(Locale(identifier: "ru")))
         XCTAssertEqual(GameFolderRefusal.tooManyEntries(limit: 100_000).message,
-                       "В папке слишком много файлов и папок: больше \(limit). Выберите папку самой игры.")
+                       L10n.string(.folderImportTooManyEntries, language: .ru, arguments: [limit]))
         XCTAssertEqual(GameFolderEnvironmentNameProblem.taken.message(for: "beat-saber"),
-                       "Имя «beat-saber» уже занято. Выберите другое.")
-        XCTAssertTrue(GameFolderHint.steamAPI.message.contains("«Добавить игру Steam…»"))
+                       L10n.string(.folderImportEnvironmentTaken, language: .ru, arguments: ["beat-saber"]))
+        let addSteam = L10n.string(.libraryAddSteam, language: .ru, arguments: [])
+        let quotedAddSteam = L10n.string(.learningQuoted, language: .ru, arguments: [addSteam])
+        XCTAssertTrue(GameFolderHint.steamAPI.message.contains(quotedAddSteam))
     }
 
     // MARK: - Names
@@ -253,7 +257,7 @@ final class GameFolderScanTests: XCTestCase {
 
         let names: [(String, String)] = [
             ("Beat Saber", "Beat Saber"),
-            ("Игра", "Игра"),
+            ("ゲーム", "ゲーム"),
             ("hello-xr", "hello-xr"),
             ("Half-Life: Alyx", "half-life-alyx"),
             ("Game.", "game"),
@@ -329,7 +333,7 @@ final class GameFolderScanTests: XCTestCase {
         XCTAssertEqual(GameFolderScan.environmentNameProblem("beat-saber-2", taken: taken), .taken)
         XCTAssertEqual(GameFolderScan.environmentNameProblem("Blood-Trail", taken: []), .taken)
         XCTAssertEqual(GameFolderScan.environmentNameProblem("brutalistick-vr", taken: []), .taken)
-        for invalid in ["", "beat saber", "-game", ".game", "игра", "a/b", String(repeating: "a", count: 65)] {
+        for invalid in ["", "beat saber", "-game", ".game", "ゲーム", "a/b", String(repeating: "a", count: 65)] {
             XCTAssertEqual(GameFolderScan.environmentNameProblem(invalid, taken: []), .invalid, invalid)
         }
     }
@@ -397,18 +401,21 @@ final class GameFolderScanTests: XCTestCase {
         XCTAssertEqual(line(device: 7, free: 300_000_000_000), "Same disk: copied as a clone, almost no extra space")
         XCTAssertEqual(line(device: 8, free: 300_000_000_000), "Needs 5.2 GB, 300 GB free")
         XCTAssertEqual(line(device: 8, free: 15_000_000_000),
-                       "Not enough space on the disk: 15 GB free, 26.67 GB needed. TrailBridge always leaves about 20 GB free.")
+                       "Not enough space on the disk: 15 GB free, 26.67 GB needed. TrailBridge always "
+                       + "leaves about 20 GB free.")
         XCTAssertEqual(line(device: 7, free: 15_000_000_000),
-                       "Not enough space on the disk: 15 GB free, 21.47 GB needed. TrailBridge always leaves about 20 GB free.")
+                       "Not enough space on the disk: 15 GB free, 21.47 GB needed. TrailBridge always "
+                       + "leaves about 20 GB free.")
         XCTAssertEqual(line(device: 7, free: nil), "Could not read the free space on the disk.")
 
         L10n.language = .ru
         let ru = Locale(identifier: "ru")
+        let needed = Int64(5_200_000_000).formatted(.byteCount(style: .file).locale(ru))
+        let available = Int64(300_000_000_000).formatted(.byteCount(style: .file).locale(ru))
         XCTAssertEqual(line(device: 8, free: 300_000_000_000),
-                       "Нужно \(Int64(5_200_000_000).formatted(.byteCount(style: .file).locale(ru))), "
-                       + "свободно \(Int64(300_000_000_000).formatted(.byteCount(style: .file).locale(ru)))")
+                       L10n.string(.folderImportSpaceCopy, language: .ru, arguments: [needed, available]))
         XCTAssertEqual(line(device: 7, free: 300_000_000_000),
-                       "Тот же диск: копия создаётся клоном и почти не занимает места")
+                       L10n.string(.folderImportSpaceClone, language: .ru, arguments: []))
     }
 
     // MARK: - Profile

@@ -22,7 +22,7 @@ final class DataFolderPathTests: XCTestCase {
         ("semicolon", "a;b&c|d>e"),
         ("newline", "line1\nline2"),
         ("emoji", "games🎮👨‍👩‍👧"),
-        ("cyrillic", "Игры ВР"),
+        ("non-latin", "ゲーム VR"),
         ("nfc", "caf\u{e9}"),
         ("nfd", "cafe\u{301}"),
         ("long-250", String(repeating: "x", count: 250)),
@@ -83,7 +83,7 @@ final class DataFolderPathTests: XCTestCase {
     /// which percent-encodes `;` differently from `URL(fileURLWithPath:)`:
     /// two unequal URLs of one folder. `loadBottle` compares paths.
     func testDataFolderURLBuiltByAppendingAComponent() throws {
-        for (label, name) in Self.names where ["semicolon", "percent-hash", "space", "cyrillic"].contains(label) {
+        for (label, name) in Self.names where ["semicolon", "percent-hash", "space", "non-latin"].contains(label) {
             let scratch = try dataFolderScratch()
             let root = scratch.appendingPathComponent(name, isDirectory: true)
                 .appendingPathComponent("Data", isDirectory: true)

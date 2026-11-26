@@ -123,10 +123,10 @@ final class LaunchFailureAdvisorTests: XCTestCase {
         }
     }
 
-    func testRussianAdvice() {
+    func testEnglishAdvice() {
         let previous = L10n.language
         defer { L10n.language = previous }
-        L10n.language = .ru
+        L10n.language = .en
         func advice(
             _ cause: LaunchFailureCause, _ connection: StreamConnectionMode = .wifi, ownSettings game: String? = nil
         ) -> LaunchFailureAdvice {
@@ -136,47 +136,47 @@ final class LaunchFailureAdvisorTests: XCTestCase {
         let wifi = L10n.string(.connectionWiFi)
 
         // The streamer still waits for the headset: by the launch's connection.
-        XCTAssertEqual(advice(.waitingForHeadset).title, "Шлем не подключился")
-        XCTAssertEqual(advice(.waitingForHeadset, .wifi).text, "Откройте ALVR в шлеме, затем нажмите «Играть».")
+        XCTAssertEqual(advice(.waitingForHeadset).title, "The headset did not connect")
+        XCTAssertEqual(advice(.waitingForHeadset, .wifi).text, "Open ALVR in the headset, then click “Play”.")
         XCTAssertEqual(advice(.waitingForHeadset, .wired).text,
-                       "Наденьте шлем и проверьте, что он разблокирован. Затем нажмите «Играть».")
-        XCTAssertEqual(advice(.waitingForHeadset, .wired).title, "Шлем не подключился")
+                       "Put on the headset and check that it is unlocked. Then click “Play”.")
+        XCTAssertEqual(advice(.waitingForHeadset, .wired).title, "The headset did not connect")
         XCTAssertEqual(advice(.waitingForHeadset, .wired, ownSettings: "Blood Trail").text,
                        advice(.waitingForHeadset, .wired).text)
 
         // No adb: the way to Wi-Fi goes through the settings the game uses.
-        XCTAssertEqual(advice(.adbMissing).title, "Нет инструментов USB")
+        XCTAssertEqual(advice(.adbMissing).title, "USB tools are missing")
         XCTAssertEqual(advice(.adbMissing, .wired).text,
-                       "Откройте раздел «Шлем» и нажмите «Скачать Android Platform Tools…». "
-                        + "Или играйте без кабеля: «Настройки» → «Подключение» → «\(wifi)».")
+                       "Open “Headset” and click “Get Android Platform Tools…”. Or play "
+                        + "without the cable: “Settings” → “Connection” → “\(wifi)”.")
         XCTAssertEqual(advice(.adbMissing, .wired, ownSettings: "Blood Trail").text,
-                       "Откройте раздел «Шлем» и нажмите «Скачать Android Platform Tools…». "
-                        + "Или играйте без кабеля: «Трансляция» → «Изменить…» → "
-                        + "«Настройки трансляции для Blood Trail…» → «Подключение» → «\(wifi)».")
-        XCTAssertFalse(advice(.adbMissing, .wired, ownSettings: "Blood Trail").text.contains("«Настройки»"))
-        XCTAssertEqual(advice(.debuggingUnauthorized).title, "Отладка по USB не разрешена")
+                       "Open “Headset” and click “Get Android Platform Tools…”. Or play "
+                        + "without the cable: “Stream” → “Change…” → "
+                        + "“Stream Settings for Blood Trail…” → “Connection” → “\(wifi)”.")
+        XCTAssertFalse(advice(.adbMissing, .wired, ownSettings: "Blood Trail").text.contains("“Settings”"))
+        XCTAssertEqual(advice(.debuggingUnauthorized).title, "USB debugging is not allowed")
         XCTAssertEqual(advice(.debuggingUnauthorized).text,
-                       "Наденьте шлем и разрешите отладку по USB. Если это ваш Mac, отметьте "
-                        + "«Всегда разрешать с этого компьютера». Если запроса нет, выньте кабель и вставьте снова.")
-        XCTAssertEqual(advice(.noAuthorizedQuest).title, "Шлем по USB не найден")
+                       "Put on the headset and allow USB debugging. If this is your Mac, tick “Always "
+                        + "allow from this computer”. If nothing asks, unplug the cable and plug it in again.")
+        XCTAssertEqual(advice(.noAuthorizedQuest).title, "No headset found over USB")
         XCTAssertEqual(advice(.noAuthorizedQuest).text,
-                       "Подключите шлем к этому Mac кабелем USB‑C с передачей данных (не только для зарядки) "
-                        + "и включите шлем. Проверьте, что в приложении Meta Horizon на телефоне "
-                        + "включён режим разработчика.")
-        XCTAssertEqual(advice(.clientMissing).title, "На шлеме нет ALVR")
-        XCTAssertEqual(advice(.clientMissing).text, "Откройте раздел «Шлем» и нажмите «Установить на шлем…».")
-        XCTAssertEqual(advice(.pausedBehindLockScreen).title, "Шлем заблокирован")
+                       "Connect the headset to this Mac with a USB-C cable that carries data (not only "
+                        + "power), and turn the headset on. Check that Developer Mode is on in the Meta "
+                        + "Horizon app on your phone.")
+        XCTAssertEqual(advice(.clientMissing).title, "ALVR is not on the headset")
+        XCTAssertEqual(advice(.clientMissing).text, "Open “Headset” and click “Install on Headset…”.")
+        XCTAssertEqual(advice(.pausedBehindLockScreen).title, "The headset is locked")
         XCTAssertEqual(advice(.pausedBehindLockScreen).text,
-                       "Наденьте шлем и разблокируйте его. Затем нажмите «Играть».")
-        XCTAssertEqual(advice(.steamNotSignedIn).title, "Вход в Steam не выполнен")
+                       "Put on the headset and unlock it. Then click “Play”.")
+        XCTAssertEqual(advice(.steamNotSignedIn).title, "Steam is not signed in")
         XCTAssertEqual(advice(.steamNotSignedIn).text,
-                       "Откройте раздел «Steam» и нажмите «Открыть Steam и войти». Войдите в Steam. "
-                        + "Затем нажмите «Закрыть Steam». После этого — «Играть».")
+                       "Open “Steam” and click “Open Steam and Sign In”. Sign in to Steam. Then "
+                        + "click “Close Steam”. After that, click “Play”.")
 
-        XCTAssertEqual(LaunchFailureAction.open(.headset).title, "Открыть «Шлем»")
-        XCTAssertEqual(LaunchFailureAction.open(.steam).title, "Открыть «Steam»")
-        XCTAssertEqual(LaunchFailureAction.restartQuickPath.title, "Запустить VR по шагам")
-        XCTAssertEqual(L10n.string(.learningHowToFix), "Как исправить")
+        XCTAssertEqual(LaunchFailureAction.open(.headset).title, "Open “Headset”")
+        XCTAssertEqual(LaunchFailureAction.open(.steam).title, "Open “Steam”")
+        XCTAssertEqual(LaunchFailureAction.restartQuickPath.title, "Start VR Step by Step")
+        XCTAssertEqual(L10n.string(.learningHowToFix), "How to Fix")
     }
 
     /// Advice names a control by the control's own text, in every language.
@@ -233,8 +233,8 @@ final class LaunchFailureAdvisorTests: XCTestCase {
     func testDestinationsUseTheSidebarNames() {
         let previous = L10n.language
         defer { L10n.language = previous }
-        L10n.language = .ru
+        L10n.language = .en
         XCTAssertEqual(LearningDestination.allCases.map(\.title),
-                       ["Подготовка", "Библиотека", "Трансляция", "Steam", "Шлем", "Настройки", "Обучение"])
+                       ["Setup", "Library", "Stream", "Steam", "Headset", "Settings", "Learning"])
     }
 }

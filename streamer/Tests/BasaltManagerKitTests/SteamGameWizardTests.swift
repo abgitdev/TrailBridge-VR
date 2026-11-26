@@ -390,7 +390,6 @@ final class SteamGameWizardTests: XCTestCase {
         XCTAssertEqual(SteamCatalogGame.verified.map(\.appID),
                        ["2669380", "1032430", "667970", "1592190", "629730"])
         XCTAssertEqual(SteamCatalogGame.all.filter(\.isVerified).count, 5)
-        XCTAssertTrue(SteamCatalogGame.verified.allSatisfy { $0.status == "Проверена в шлеме" })
         // BONELAB starts its own OpenXR loader; the others need OpenComposite.
         XCTAssertEqual(SteamCatalogGame.verified.filter { !$0.needsOpenVR }.map(\.name), ["BONELAB"])
         XCTAssertEqual(Set(SteamCatalogGame.verified.compactMap(\.environmentName)).count, 5)
@@ -400,13 +399,11 @@ final class SteamGameWizardTests: XCTestCase {
         XCTAssertNil(SteamCatalogGame.other.verifiedIn)
         XCTAssertEqual(VerifiedMonth(year: 2026, month: 11).text(locale: Locale(identifier: "en")),
                        "November 2026")
-        let russian = VerifiedMonth(year: 2026, month: 11).text(locale: Locale(identifier: "ru"))
-        XCTAssertTrue(russian.hasPrefix("ноябрь 2026"), russian)
-        XCTAssertEqual(SteamCatalogGame.other.name, "Другая игра")
-        XCTAssertEqual(SteamCatalogGame.other.status, "Не проверена")
+        XCTAssertEqual(VerifiedMonth(year: 2026, month: 11).text(locale: Locale(identifier: "pl")),
+                       "listopad 2026")
+        XCTAssertEqual(SteamCatalogGame.other.name, "Another game")
         XCTAssertFalse(SteamCatalogGame.other.isVerified)
         XCTAssertNil(SteamCatalogGame.other.appID)
-        XCTAssertEqual(SteamWizardCopy.endToEndCaveat, "Сам мастер пока не проверен от начала до конца на чистом окружении.")
     }
 
     func testOnlyTheVerifiedSteamGamesCountAsVerified() {
@@ -447,7 +444,7 @@ final class SteamGameWizardTests: XCTestCase {
         for name in ["a", "Game_1.2-test", String(repeating: "a", count: 64)] {
             XCTAssertEqual(try SteamCatalogGame.other.bottleName(custom: name), try BottleName.validate(name))
         }
-        for name in ["", "../game", ".game", "-game", "игра", " game", "game ", "game/name", String(repeating: "a", count: 65)] {
+        for name in ["", "../game", ".game", "-game", "café", " game", "game ", "game/name", String(repeating: "a", count: 65)] {
             XCTAssertThrowsError(try SteamCatalogGame.other.bottleName(custom: name), name)
             XCTAssertThrowsError(try BottleName.validate(name), name)
         }

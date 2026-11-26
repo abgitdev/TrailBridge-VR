@@ -1100,7 +1100,7 @@ final class BasaltAppModel: ObservableObject {
         }
     }
 
-    /// «Продолжить» in the network storage question.
+    /// "Continue" in the network storage question.
     func confirmNetworkDataFolder() async {
         guard let verdict = networkDataFolder else { return }
         networkDataFolder = nil

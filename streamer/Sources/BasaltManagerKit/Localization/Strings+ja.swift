@@ -609,6 +609,7 @@ final class StringsJA: LocalizationTable {
         .licensesTitle: "ライセンス",
         .licensesMissing: "このビルドにライセンスの本文が見つかりません。",
         // MARK: - Settings language
+        .languageNativeName: "日本語",
         .settingsLanguage: "言語",
         .settingsLanguageImmediate: "言語はすぐに切り替わります。",
         .settingsTranslationNotReviewed: "翻訳未レビュー",

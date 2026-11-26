@@ -168,7 +168,7 @@ public struct DiagnosticRedactor: Sendable {
     }
 
     /// A pattern for one name as text may spell it: as given, composed or
-    /// decomposed (file systems differ on "й"), and percent-encoded as in a
+    /// decomposed (file systems differ on "é"), and percent-encoded as in a
     /// file URL.
     private static func spellings(of name: String) -> String {
         var forms = [name, name.precomposedStringWithCanonicalMapping,

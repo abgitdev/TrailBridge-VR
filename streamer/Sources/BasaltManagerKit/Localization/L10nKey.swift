@@ -395,6 +395,7 @@ public enum L10nKey: String, CaseIterable, Sendable {
     case licensesMissing
 
     // MARK: - Settings language
+    case languageNativeName
     case settingsLanguage
     case settingsLanguageImmediate
     case settingsTranslationNotReviewed

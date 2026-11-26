@@ -64,12 +64,13 @@ final class LocalizationTests: XCTestCase {
             L10n.string(.engineDownloadGuidance, L10n.string(.setupEngineDownload, "11.10"),
                         L10n.string(.sidebarSetup)),
             "Wine has not been downloaded yet. Open “Setup” and click “Download Wine 11.10…”.")
-        L10n.language = .ru
-        XCTAssertEqual(L10n.string(.setupEngineDownload, PinnedWine.download.version), "Скачать Wine 11.10…")
+        // Another language puts the same version, button and page in its own sentence.
+        L10n.language = .de
+        XCTAssertEqual(L10n.string(.setupEngineDownload, PinnedWine.download.version), "Wine 11.10 laden…")
         XCTAssertEqual(
             L10n.string(.engineDownloadGuidance, L10n.string(.setupEngineDownload, "11.10"),
                         L10n.string(.sidebarSetup)),
-            "Wine ещё не скачан. Откройте «Подготовка» и нажмите «Скачать Wine 11.10…».")
+            "Wine wurde noch nicht geladen. „Einrichtung“ öffnen und auf „Wine 11.10 laden…“ klicken.")
     }
 
     /// No text of the Setup page sends a person to build what the app
@@ -216,10 +217,11 @@ final class LocalizationTests: XCTestCase {
     }
 
     func testLanguageMetadata() {
-        XCTAssertEqual(AppLanguage.allCases.map(\.nativeName), [
-            "English", "Русский", "Italiano", "Deutsch", "Español", "Français", "Українська", "Polski", "한국어", "日本語"
-        ])
         for language in AppLanguage.allCases {
+            // Each table spells its language as the system does: "Deutsch", "日本語".
+            let own = language.locale.localizedString(forLanguageCode: language.rawValue)?
+                .capitalized(with: language.locale)
+            XCTAssertEqual(language.nativeName, own, language.rawValue)
             XCTAssertEqual(language.isReviewed, language == .en || language == .ru)
             XCTAssertEqual(language.locale.language.languageCode?.identifier, language.rawValue)
         }
@@ -231,10 +233,10 @@ final class LocalizationTests: XCTestCase {
         L10n.language = .en
         XCTAssertEqual(L10n.string(.aboutVersion, "0.2.0", "83"), "Version 0.2.0 (build 83)")
         XCTAssertEqual(L10n.string(.librarySearchEmpty, "100%"), "No results for “100%”")
-        L10n.language = .ru
-        XCTAssertEqual(L10n.string(.aboutVersion, "0.2.0", "83"), "Версия 0.2.0 (сборка 83)")
-        XCTAssertEqual(L10n.string(.sidebarLibrary), "Библиотека")
-        XCTAssertEqual(L10n.string(.sidebarMissingSteps, Int64(2)), "Не хватает обязательных пунктов: 2")
+        L10n.language = .de
+        XCTAssertEqual(L10n.string(.aboutVersion, "0.2.0", "83"), "Version 0.2.0 (Build 83)")
+        XCTAssertEqual(L10n.string(.sidebarLibrary), "Bibliothek")
+        XCTAssertEqual(L10n.string(.sidebarMissingSteps, Int64(2)), "Fehlende Pflichtschritte: 2")
         L10n.language = .ko
         XCTAssertEqual(L10n.string(.setupProgress, Int64(2), Int64(5)), "5개 중 2개 준비됨")
         L10n.language = .ja
@@ -248,15 +250,25 @@ final class LocalizationTests: XCTestCase {
         XCTAssertEqual(L10n.plural(.libraryGameCount, 0), "0 games")
         XCTAssertEqual(L10n.plural(.libraryGameCount, 1), "1 game")
         XCTAssertEqual(L10n.plural(.libraryGameCount, 2), "2 games")
+        // Russian and Ukrainian: 1 and 21 take the "one" form, 2 and 22 "few", 5 and 11 "many".
+        let categories: [(Int, PluralCategory)] = [
+            (1, .one), (2, .few), (5, .many), (11, .many), (21, .one), (22, .few)
+        ]
+        for language in [AppLanguage.ru, .uk] {
+            L10n.language = language
+            let forms = LocalizationTables.table(for: language)?.plurals[.libraryGameCount] ?? [:]
+            XCTAssertEqual(Set([PluralCategory.one, .few, .many].compactMap { forms[$0] }).count, 3,
+                           language.rawValue)
+            for (count, category) in categories {
+                XCTAssertEqual(L10n.plural(.libraryGameCount, count),
+                               String(format: forms[category] ?? "", locale: language.locale, Int64(count)),
+                               "\(language.rawValue) \(count)")
+            }
+        }
         L10n.language = .ru
-        for (count, noun) in [(1, "игра"), (2, "игры"), (5, "игр"), (11, "игр"), (21, "игра"), (22, "игры")] {
-            XCTAssertEqual(L10n.plural(.libraryGameCount, count), "\(count) \(noun)")
-        }
-        XCTAssertEqual(L10n.plural(.libraryHiddenGames, 22), "22 игры Steam скрыты фильтром «Только VR-игры»")
-        L10n.language = .uk
-        for (count, noun) in [(1, "гра"), (2, "гри"), (5, "ігор"), (11, "ігор"), (21, "гра"), (22, "гри")] {
-            XCTAssertEqual(L10n.plural(.libraryGameCount, count), "\(count) \(noun)")
-        }
+        let hidden = LocalizationTables.table(for: .ru)?.plurals[.libraryHiddenGames]?[.few] ?? ""
+        XCTAssertEqual(L10n.plural(.libraryHiddenGames, 22),
+                       String(format: hidden, locale: AppLanguage.ru.locale, Int64(22)))
         L10n.language = .pl
         for (count, noun) in [(1, "gra"), (2, "gry"), (5, "gier"), (11, "gier"), (21, "gier"), (22, "gry")] {
             XCTAssertEqual(L10n.plural(.libraryGameCount, count), "\(count) \(noun)")

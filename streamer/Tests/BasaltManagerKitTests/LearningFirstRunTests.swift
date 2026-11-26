@@ -79,19 +79,20 @@ final class LearningFirstRunTests: XCTestCase {
         XCTAssertEqual(cabled.chapter, .game)
     }
 
-    func testRussianTexts() throws {
+    func testEnglishTexts() throws {
         let previous = L10n.language
         defer { L10n.language = previous }
-        L10n.language = .ru
+        L10n.language = .en
         let ready = try XCTUnwrap(LearningFirstRun.invitation(LearningFixture.newcomer))
-        XCTAssertEqual(ready.text, "Пройдём путь до первой игры по шагам?")
-        XCTAssertEqual(ready.note, "Обучение всегда в боковой панели.")
-        XCTAssertEqual(ready.startTitle, "Начать")
-        XCTAssertEqual(ready.laterTitle, "Не сейчас")
+        XCTAssertEqual(ready.text, "Shall we go to your first game step by step?")
+        XCTAssertEqual(ready.note, "Learning is always in the sidebar.")
+        XCTAssertEqual(ready.startTitle, "Start")
+        XCTAssertEqual(ready.laterTitle, "Not Now")
         let unbuilt = try XCTUnwrap(LearningFirstRun.invitation(LearningFixture.unbuiltMac))
-        XCTAssertEqual(unbuilt.text, "Сначала нужно собрать части программы — это делает тот, "
-            + "кто устанавливал TrailBridge. Пока можно подготовить шлем.")
-        XCTAssertEqual(unbuilt.startTitle, "Начать")
+        XCTAssertEqual(unbuilt.text,
+                       "First, parts of the app have to be built. The person who installed TrailBridge "
+                       + "does that. Meanwhile, you can prepare the headset.")
+        XCTAssertEqual(unbuilt.startTitle, "Start")
     }
 
     /// A packaged app on a new Mac: only the Wine it downloads itself is
@@ -99,7 +100,7 @@ final class LearningFirstRunTests: XCTestCase {
     func testInvitationOnAMacThatOnlyLacksWhatTheSetupPageSupplies() throws {
         let previous = L10n.language
         defer { L10n.language = previous }
-        L10n.language = .ru
+        L10n.language = .en
         var facts = LearningFixture.newcomer
         facts.setupChecks = LearningFixture.checks().filter { $0.id != "wine" } + [
             SetupCheck(id: "wine", title: "wine", detail: "", status: .actionNeeded,
@@ -111,14 +112,15 @@ final class LearningFirstRunTests: XCTestCase {
         XCTAssertFalse(invitation.macReady)
         XCTAssertTrue(invitation.macFixedOnSetupPage)
         XCTAssertEqual(invitation.chapter, .mac)
-        XCTAssertEqual(invitation.text, "Сначала нужно подготовить Mac: приложение само скачает "
-            + "недостающее или подскажет, что сделать. Начнём с этого?")
+        XCTAssertEqual(invitation.text,
+                       "First the Mac has to be prepared: the app downloads what is missing or shows "
+                       + "what to do. Shall we start with that?")
         // One part that has to be built keeps the old words.
         facts.setupChecks += [SetupCheck(id: "runtime2", title: "runtime", detail: "",
                                          status: .actionNeeded, required: true)]
         let built = try XCTUnwrap(LearningFirstRun.invitation(facts))
         XCTAssertFalse(built.macFixedOnSetupPage)
-        XCTAssertTrue(built.text.hasPrefix("Сначала нужно собрать части программы"))
+        XCTAssertTrue(built.text.hasPrefix("First, parts of the app have to be built"))
         XCTAssertFalse(try XCTUnwrap(LearningFirstRun.invitation(LearningFixture.newcomer)).macFixedOnSetupPage)
     }
 }

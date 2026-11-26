@@ -609,6 +609,7 @@ final class StringsRU: LocalizationTable {
         .licensesTitle: "Лицензии",
         .licensesMissing: "Текст лицензии не найден в этой сборке.",
         // MARK: - Settings language
+        .languageNativeName: "Русский",
         .settingsLanguage: "Язык",
         .settingsLanguageImmediate: "Язык меняется сразу.",
         .settingsTranslationNotReviewed: "перевод не проверен",

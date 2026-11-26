@@ -609,6 +609,7 @@ final class StringsFR: LocalizationTable {
         .licensesTitle: "Licences",
         .licensesMissing: "Le texte de la licence est introuvable dans cette version.",
         // MARK: - Settings language
+        .languageNativeName: "Français",
         .settingsLanguage: "Langue",
         .settingsLanguageImmediate: "La langue change immédiatement.",
         .settingsTranslationNotReviewed: "traduction non relue",

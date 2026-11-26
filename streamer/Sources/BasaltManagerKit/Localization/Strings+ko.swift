@@ -609,6 +609,7 @@ final class StringsKO: LocalizationTable {
         .licensesTitle: "라이선스",
         .licensesMissing: "이 빌드에서 라이선스 본문을 찾지 못했어요.",
         // MARK: - Settings language
+        .languageNativeName: "한국어",
         .settingsLanguage: "언어",
         .settingsLanguageImmediate: "언어가 즉시 변경돼요.",
         .settingsTranslationNotReviewed: "검토되지 않은 번역",

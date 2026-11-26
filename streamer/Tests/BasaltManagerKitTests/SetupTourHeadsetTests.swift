@@ -8,7 +8,7 @@ final class SetupTourHeadsetTests: XCTestCase {
     private typealias Step = SetupTour.Step
 
     private let tested = PinnedHeadsetDownload.testedALVR.version
-    private let intro = "Шлем настраивается по кабелю один раз — даже если потом играть по Wi‑Fi."
+    private let intro = "The headset is set up over a cable once — even if you play over Wi-Fi later."
     private let otherError = "Headset command failed: adb: protocol fault"
 
     /// A new person on the Headset page; the page has not asked yet.
@@ -29,10 +29,10 @@ final class SetupTourHeadsetTests: XCTestCase {
         try XCTUnwrap(tour.presentation)
     }
 
-    private func russian(_ body: () throws -> Void) rethrows {
+    private func english(_ body: () throws -> Void) rethrows {
         let previous = L10n.language
         defer { L10n.language = previous }
-        L10n.language = .ru
+        L10n.language = .en
         try body()
     }
 
@@ -52,19 +52,19 @@ final class SetupTourHeadsetTests: XCTestCase {
     // MARK: - The whole way
 
     func testANewPersonWalksTheSevenSteps() throws {
-        try russian {
+        try english {
             // Started from the Learning page: the Headset page has not asked.
             var tour = try tour(LearningFixture.newcomer.with { $0.section = .learning })
             XCTAssertEqual(tour.phase, .step(.headsetTools))
             var hint = try shown(tour)
-            XCTAssertEqual(hint.label, "Шлем · шаг 1 из 7")
-            XCTAssertEqual(hint.text, intro + " Проверяем инструменты USB…")
+            XCTAssertEqual(hint.label, "Headset · step 1 of 7")
+            XCTAssertEqual(hint.text, intro + " Checking the USB tools…")
             XCTAssertEqual(hint.target, .headsetStatus)
             XCTAssertEqual(hint.opensSection(afterShowing: nil), .headset)
             XCTAssertEqual(hint.buttons, [.help])
             XCTAssertNil(hint.primaryButton)
             XCTAssertEqual(hint.help?.tips,
-                           ["Раздел «Шлем» сам проверяет шлем каждые несколько секунд, пока он открыт."])
+                           ["“Headset” checks the headset by itself every few seconds while it is open."])
             XCTAssertEqual(hint.help?.options, [])
 
             // The page opens and asks. The wrapper has no adb to run.
@@ -73,14 +73,14 @@ final class SetupTourHeadsetTests: XCTestCase {
             XCTAssertEqual(tour.phase, .step(.headsetTools))
             hint = try shown(tour)
             XCTAssertEqual(hint.text, intro
-                + " Нажмите «Скачать Android Platform Tools…», затем «Принять и скачать».")
+                + " Click “Get Android Platform Tools…”, then “Agree and Download”.")
             XCTAssertEqual(hint.target, .headsetGetTools)
             XCTAssertNil(hint.section)
             XCTAssertEqual(hint.buttons, [.help])
-            XCTAssertEqual(hint.buttons.map(hint.title(of:)), ["Не получается?"])
+            XCTAssertEqual(hint.buttons.map(hint.title(of:)), ["Not working?"])
             XCTAssertEqual(hint.help?.tips, [
-                "Если появилась ошибка, причина — в карточке выше, под «Подробнее». "
-                    + "Нажмите «Скачать Android Platform Tools…» ещё раз.",
+                "If an error appears, its reason is in the card above, under “Details”. "
+                    + "Click “Get Android Platform Tools…” again.",
             ])
 
             // The confirmation is a sheet: nothing is drawn, nothing moves.
@@ -92,50 +92,51 @@ final class SetupTourHeadsetTests: XCTestCase {
             feed(&tour) { $0.pageSheetOpen = false }
             XCTAssertEqual(tour.phase, .step(.headsetAccount))
             hint = try shown(tour)
-            XCTAssertEqual(hint.label, "Шлем · шаг 2 из 7")
-            XCTAssertEqual(hint.text, "Нужен аккаунт разработчика Meta: от 18 лет, с организацией "
-                + "и подтверждением аккаунта. Это самый трудный шаг — можно попросить помощи.")
+            XCTAssertEqual(hint.label, "Headset · step 2 of 7")
+            XCTAssertEqual(hint.text, "You need a Meta developer account: age 18 or over, with an organization "
+                + "and a verified account. This is the hardest step — you can ask for help.")
             XCTAssertNil(hint.target)
             XCTAssertEqual(hint.buttons, [.link(.metaDeveloperSignUp), .confirm])
-            XCTAssertEqual(hint.buttons.map(hint.title(of:)), ["Открыть сайт Meta", "Готово"])
+            XCTAssertEqual(hint.buttons.map(hint.title(of:)), ["Open Meta's Site", "Done"])
             XCTAssertEqual(hint.primaryButton, .confirm)
             XCTAssertEqual(SetupLink.metaDeveloperSignUp.url.absoluteString,
                            "https://developers.meta.com/horizon/sign-up/")
             // The site's button opens a page; the tour stays where it is.
             XCTAssertNil(SetupButton.link(.metaDeveloperSignUp).event)
-            XCTAssertEqual(hint.help?.title, "Не получается?")
+            XCTAssertEqual(hint.help?.title, "Not working?")
             XCTAssertEqual(hint.help?.tips, [
-                "На сайте Meta попросит создать организацию (команду разработчиков) и подтвердить аккаунт.",
-                "Без компании организацию подтверждают своей личностью: Meta называет это "
-                    + "«Admin Verification». Делается один раз.",
+                "On its site, Meta asks you to create an organization (a developer team) "
+                    + "and to verify the account.",
+                "Without a company, you verify the organization with your own identity: Meta calls this "
+                    + "“Admin Verification”. It is done once.",
             ])
             XCTAssertEqual(hint.help?.options, [])
 
             try press(.confirm, in: &tour)
             XCTAssertEqual(tour.phase, .step(.headsetDeveloperMode))
             hint = try shown(tour)
-            XCTAssertEqual(hint.label, "Шлем · шаг 3 из 7")
-            XCTAssertEqual(hint.text, "В телефоне, в Meta Horizon: значок шлема на панели → ваш шлем вверху → "
-                + "«Headset Settings» (настройки шлема) → включите «Developer Mode» (режим разработчика).")
+            XCTAssertEqual(hint.label, "Headset · step 3 of 7")
+            XCTAssertEqual(hint.text, "On your phone, in Meta Horizon: the headset icon in the toolbar → "
+                + "your headset at the top → “Headset Settings” → turn on “Developer Mode”.")
             XCTAssertNil(hint.target)
             XCTAssertEqual(hint.buttons, [.back, .confirm])
             XCTAssertEqual(hint.help?.tips, [
-                "Если «Developer Mode» не включается, сначала нужен аккаунт разработчика Meta — "
-                    + "это предыдущий шаг.",
+                "If “Developer Mode” will not turn on, you need a Meta developer account first: "
+                    + "that is the previous step.",
             ])
 
             try press(.confirm, in: &tour)
             XCTAssertEqual(tour.phase, .step(.headsetCable))
             hint = try shown(tour)
-            XCTAssertEqual(hint.label, "Шлем · шаг 4 из 7")
-            XCTAssertEqual(hint.text, "Подключите шлем к этому Mac кабелем USB‑C, который передаёт данные, "
-                + "и включите шлем. Шаг засчитается сам, когда Mac увидит шлем.")
+            XCTAssertEqual(hint.label, "Headset · step 4 of 7")
+            XCTAssertEqual(hint.text, "Connect the headset to this Mac with a USB-C cable that carries data, "
+                + "and turn the headset on. The step counts itself once the Mac sees the headset.")
             XCTAssertEqual(hint.target, .headsetStatus)
             XCTAssertEqual(hint.buttons, [.back, .help])
             XCTAssertEqual(hint.help?.tips, [
-                "Кабель должен передавать данные, а не только заряжать. Шлем должен быть включён.",
-                "Проверьте в Meta Horizon, что «Developer Mode» (режим разработчика) включён.",
-                "Раздел «Шлем» сам проверяет шлем каждые несколько секунд, пока он открыт.",
+                "The cable must carry data, not only power. The headset must be turned on.",
+                "Check in Meta Horizon that “Developer Mode” is on.",
+                "“Headset” checks the headset by itself every few seconds while it is open.",
             ])
             // Waiting: "Next" is not a way on.
             tour.handle(.next)
@@ -145,34 +146,34 @@ final class SetupTourHeadsetTests: XCTestCase {
             feed(&tour, LearningFixture.headset(.unauthorized))
             XCTAssertEqual(tour.phase, .step(.headsetDebugging))
             hint = try shown(tour)
-            XCTAssertEqual(hint.label, "Шлем · шаг 5 из 7")
-            XCTAssertEqual(hint.text, "В шлеме: «Allow USB debugging?» (разрешить отладку?). Отметьте "
-                + "«Always allow from this computer» (всегда с этого Mac), затем «Allow» (разрешить).")
-            XCTAssertEqual(hint.text.count, 145)
+            XCTAssertEqual(hint.label, "Headset · step 5 of 7")
+            XCTAssertEqual(hint.text, "In the headset, at “Allow USB debugging?”, tick "
+                + "“Always allow from this computer”, then choose “Allow”.")
+            XCTAssertEqual(hint.text.count, 103)
             XCTAssertEqual(hint.target, .headsetStatus)
             // The cable is in: nothing before this is left to do again.
             XCTAssertEqual(hint.buttons, [.help])
             XCTAssertEqual(hint.help?.tips, [
-                "Запроса нет? Выньте кабель и вставьте снова.",
-                "Не нажимайте «Don't show again» (больше не показывать): запрос вернётся, только если "
-                    + "в настройках разработчика шлема снова включить «USB Connection Dialog».",
-                "Шлем должен быть включён и разблокирован.",
+                "Nothing asks? Unplug the cable and plug it in again.",
+                "Do not choose “Don't show again”: the request then comes back only after "
+                    + "“USB Connection Dialog” is turned on again in the headset's developer settings.",
+                "The headset must be awake and unlocked.",
             ])
 
             // Allowed. No ALVR on the headset.
             feed(&tour, LearningFixture.headset(.connected))
             XCTAssertEqual(tour.phase, .step(.headsetInstall))
             hint = try shown(tour)
-            XCTAssertEqual(hint.label, "Шлем · шаг 6 из 7")
-            XCTAssertEqual(hint.text, "Нажмите «Установить на шлем…», затем «Скачать и установить». "
-                + "Не отключайте кабель, пока идёт установка.")
+            XCTAssertEqual(hint.label, "Headset · step 6 of 7")
+            XCTAssertEqual(hint.text, "Click “Install on Headset…”, then “Download and Install”. "
+                + "Keep the cable connected while it installs.")
             XCTAssertEqual(hint.target, .headsetInstall)
             XCTAssertEqual(hint.buttons, [.help])
             XCTAssertEqual(hint.help?.tips, [
-                "Если появилась ошибка, причина — в карточке выше, под «Подробнее». "
-                    + "Нажмите «Установить на шлем…» ещё раз.",
-                "ALVR уже стоит на шлеме, а здесь написано «Клиент ALVR не установлен»? ALVR, установленный "
-                    + "другим способом, раздел может не видеть. Тогда пропустите шаг.",
+                "If an error appears, its reason is in the card above, under “Details”. "
+                    + "Click “Install on Headset…” again.",
+                "ALVR is already on the headset, but it says “ALVR client not installed” here? This section "
+                    + "may not see an ALVR that was installed another way. Skip this step then.",
             ])
             XCTAssertEqual(hint.help?.options, [.skip])
             XCTAssertFalse(tour.facts.isDone(.headset))
@@ -181,9 +182,9 @@ final class SetupTourHeadsetTests: XCTestCase {
             feed(&tour, LearningFixture.headsetReady)
             XCTAssertEqual(tour.phase, .step(.headsetOpenALVR))
             hint = try shown(tour)
-            XCTAssertEqual(hint.label, "Шлем · шаг 7 из 7")
-            XCTAssertEqual(hint.text, "В шлеме: кнопка Meta на правом контроллере → меню слева → "
-                + "«Unknown Sources» (неизвестные источники) → ALVR. Когда ALVR откроется, нажмите «Готово».")
+            XCTAssertEqual(hint.label, "Headset · step 7 of 7")
+            XCTAssertEqual(hint.text, "In the headset: the Meta button on the right controller → "
+                + "the menu on the left → “Unknown Sources” → ALVR. When ALVR opens, click “Done”.")
             XCTAssertNil(hint.target)
             XCTAssertEqual(hint.buttons, [.confirm])
             XCTAssertEqual(hint.primaryButton, .confirm)
@@ -196,7 +197,7 @@ final class SetupTourHeadsetTests: XCTestCase {
             XCTAssertNil(tour.pausedStep)
             hint = try shown(tour)
             XCTAssertEqual(hint.id, "setup-headset-end")
-            XCTAssertEqual(hint.text, "Глава «Шлем» готова. Дальше — «Игра».")
+            XCTAssertEqual(hint.text, "The “Headset” chapter is done. Next: “Game”.")
             XCTAssertEqual(hint.buttons, [.continueTo(.game), .later])
         }
     }
@@ -246,10 +247,10 @@ final class SetupTourHeadsetTests: XCTestCase {
     /// tools are missing, and the download is offered. Any other error is
     /// shown as an error, and the download is not offered.
     func testTheToolsStepFollowsThePollResult() throws {
-        try russian {
+        try english {
             // A resumed pass: without the opening sentence.
             var tour = try tour(onPage, resumeAt: .headsetTools)
-            XCTAssertEqual(try shown(tour).text, "Проверяем инструменты USB…")
+            XCTAssertEqual(try shown(tour).text, "Checking the USB tools…")
             XCTAssertEqual(try shown(tour).target, .headsetStatus)
 
             // No adb at all, and the wrapper with nothing behind it.
@@ -258,7 +259,7 @@ final class SetupTourHeadsetTests: XCTestCase {
                 tour.handle(.facts(missing))
                 XCTAssertEqual(tour.phase, .step(.headsetTools))
                 let hint = try shown(tour)
-                XCTAssertEqual(hint.text, "Нажмите «Скачать Android Platform Tools…», затем «Принять и скачать».")
+                XCTAssertEqual(hint.text, "Click “Get Android Platform Tools…”, then “Agree and Download”.")
                 XCTAssertEqual(hint.target, .headsetGetTools)
                 XCTAssertEqual(hint.buttons, [.help])
             }
@@ -268,14 +269,14 @@ final class SetupTourHeadsetTests: XCTestCase {
             XCTAssertEqual(tour.phase, .step(.headsetTools))
             var hint = try shown(tour)
             XCTAssertEqual(hint.text,
-                           "Не удалось проверить шлем. Причина — в карточке выше: «Ошибка» → «Подробнее».")
+                           "The headset could not be checked. See the card above: “Error” → “Details”.")
             XCTAssertEqual(hint.target, .headsetStatus)
             XCTAssertFalse(hint.text.contains("Android Platform Tools"))
             XCTAssertEqual(hint.buttons, [.help])
             XCTAssertEqual(hint.help?.tips, [
-                "Проверьте USB-кабель и разрешение отладки в шлеме. "
-                    + "Если настройка не завершилась, повторите её.",
-                "Раздел «Шлем» сам проверяет шлем каждые несколько секунд, пока он открыт.",
+                "Check the USB cable and debugging permission in your headset. "
+                    + "If setup did not finish, try the setup action again.",
+                "“Headset” checks the headset by itself every few seconds while it is open.",
             ])
             XCTAssertEqual(hint.help?.options, [])
 
@@ -308,12 +309,12 @@ final class SetupTourHeadsetTests: XCTestCase {
     // MARK: - The opening sentence
 
     func testTheOpeningSentenceGoesIntoTheToolsStepOrOntoItsOwnCard() throws {
-        try russian {
+        try english {
             // The tools are missing: the sentence is the step's first words,
             // and it is not said again.
             var missing = try tour(onPage.with(LearningFixture.headsetScanFailed(LearningFixture.wrapperWithoutADB)))
             XCTAssertEqual(missing.headsetIntro, .withTools)
-            XCTAssertTrue(try shown(missing).text.hasPrefix(intro + " Нажмите"))
+            XCTAssertTrue(try shown(missing).text.hasPrefix(intro + " Click"))
             feed(&missing, LearningFixture.headset(.none))
             XCTAssertEqual(missing.phase, .step(.headsetAccount))
             XCTAssertFalse(try shown(missing).text.contains(intro))
@@ -321,18 +322,18 @@ final class SetupTourHeadsetTests: XCTestCase {
             // The same with a question that failed.
             let failed = try tour(onPage.with(LearningFixture.headsetScanFailed(otherError)))
             XCTAssertEqual(try shown(failed).text, intro
-                + " Не удалось проверить шлем. Причина — в карточке выше: «Ошибка» → «Подробнее».")
+                + " The headset could not be checked. See the card above: “Error” → “Details”.")
 
             // The tools are there: no step has room for the sentence, so it
             // gets a card of its own, once.
             var ready = try tour(noCable)
             XCTAssertEqual(ready.phase, .step(.headsetIntro))
             var hint = try shown(ready)
-            XCTAssertEqual(hint.label, "Шлем")
+            XCTAssertEqual(hint.label, "Headset")
             XCTAssertEqual(hint.text, intro)
             XCTAssertNil(hint.target)
             XCTAssertEqual(hint.buttons, [.next])
-            XCTAssertEqual(hint.buttons.map(hint.title(of:)), ["Далее"])
+            XCTAssertEqual(hint.buttons.map(hint.title(of:)), ["Next"])
             XCTAssertNil(hint.help)
             // The headset shows up meanwhile: the card stays to be read.
             feed(&ready, LearningFixture.headset(.unauthorized))
@@ -346,7 +347,7 @@ final class SetupTourHeadsetTests: XCTestCase {
             // "Checking…" for a moment is not the sentence said: the tools
             // turn out to be there, and the card comes.
             var checking = try tour(onPage)
-            XCTAssertEqual(try shown(checking).text, intro + " Проверяем инструменты USB…")
+            XCTAssertEqual(try shown(checking).text, intro + " Checking the USB tools…")
             XCTAssertEqual(checking.headsetIntro, .pending)
             feed(&checking, LearningFixture.headset(.none))
             XCTAssertEqual(checking.phase, .step(.headsetIntro))
@@ -445,11 +446,11 @@ final class SetupTourHeadsetTests: XCTestCase {
     /// "Replace the old ALVR client?" can only be asked when an ALVR is on
     /// the headset already.
     func testTheReplaceSentenceNeedsAnotherALVROnTheHeadset() throws {
-        try russian {
-            let plain = "Нажмите «Установить на шлем…», затем «Скачать и установить». "
-                + "Не отключайте кабель, пока идёт установка."
-            let replace = "Нажмите «Установить на шлем…», затем «Скачать и установить». "
-                + "Если спросит «Заменить старый клиент ALVR?» — «Удалить и установить»."
+        try english {
+            let plain = "Click “Install on Headset…”, then “Download and Install”. "
+                + "Keep the cable connected while it installs."
+            let replace = "Click “Install on Headset…”, then “Download and Install”. "
+                + "If it asks “Replace the Old ALVR Client?”, choose “Uninstall and Install”."
             let none = try tour(onPage.with(LearningFixture.headset(.connected)), resumeAt: .headsetInstall)
             XCTAssertEqual(try shown(none).text, plain)
             for client in ["20.11.0", "21.0.0"] {
@@ -526,7 +527,7 @@ final class SetupTourHeadsetTests: XCTestCase {
     /// Only the open Headset page asks the headset. A step that waits for
     /// its answer says so when the user leaves, instead of waiting forever.
     func testAWaitingStepOffersTheHeadsetPageWhenTheUserLeaves() throws {
-        try russian {
+        try english {
             for step in [Step.headsetTools, .headsetCable, .headsetDebugging, .headsetInstall] {
                 let facts: LearningFacts
                 switch step {
@@ -546,9 +547,10 @@ final class SetupTourHeadsetTests: XCTestCase {
                 let away = try shown(tour)
                 XCTAssertEqual(away.id, "setup-\(step.rawValue)-away")
                 XCTAssertEqual(away.label, waiting.label)
-                XCTAssertEqual(away.text, "Этот шаг — в разделе «Шлем»: шлем проверяется, только пока раздел открыт.")
+                XCTAssertEqual(away.text, "This step is in “Headset”: the headset is checked "
+                    + "only while that section is open.")
                 XCTAssertEqual(away.buttons, [.open(.headset)])
-                XCTAssertEqual(away.buttons.map(away.title(of:)), ["Открыть «Шлем»"])
+                XCTAssertEqual(away.buttons.map(away.title(of:)), ["Open “Headset”"])
                 XCTAssertEqual(away.primaryButton, .open(.headset))
                 XCTAssertNil(SetupButton.open(.headset).event)
                 XCTAssertNil(away.target)
@@ -700,7 +702,7 @@ final class SetupTourHeadsetTests: XCTestCase {
     /// A player on Wi-Fi with no cable in: a review outlines only what is on
     /// the page now and says where the rest appears.
     func testAReviewOnAWiFiMacWithoutACable() throws {
-        try russian {
+        try english {
             let facts = LearningFixture.returning.with(LearningFixture.headset(.none)).with {
                 $0.connection = .wifi
                 $0.section = .headset
@@ -712,31 +714,31 @@ final class SetupTourHeadsetTests: XCTestCase {
             let cards: [(Step, String, SetupTarget?)] = [
                 (.headsetIntro, intro, nil),
                 (.headsetTools,
-                 "Кнопка «Скачать Android Platform Tools…» появляется здесь, только когда инструментов нет.",
+                 "“Get Android Platform Tools…” shows here only while the USB tools are missing.",
                  nil),
                 (.headsetAccount,
-                 "Нужен аккаунт разработчика Meta: от 18 лет, с организацией и подтверждением аккаунта. "
-                    + "Это самый трудный шаг — можно попросить помощи.", nil),
+                 "You need a Meta developer account: age 18 or over, with an organization "
+                    + "and a verified account. This is the hardest step — you can ask for help.", nil),
                 (.headsetDeveloperMode,
-                 "В телефоне, в Meta Horizon: значок шлема на панели → ваш шлем вверху → "
-                    + "«Headset Settings» (настройки шлема) → включите «Developer Mode» (режим разработчика).",
+                 "On your phone, in Meta Horizon: the headset icon in the toolbar → "
+                    + "your headset at the top → “Headset Settings” → turn on “Developer Mode”.",
                  nil),
                 (.headsetCable,
-                 "Здесь видно, подключён ли шлем кабелем USB‑C. Для игры по Wi‑Fi кабель не нужен.",
+                 "This shows whether the headset is connected by a USB-C cable. Playing over Wi-Fi needs no cable.",
                  .headsetStatus),
                 (.headsetDebugging,
-                 "В шлеме: «Allow USB debugging?» (разрешить отладку?). Отметьте «Always allow "
-                    + "from this computer» (всегда с этого Mac), затем «Allow» (разрешить).", nil),
+                 "In the headset, at “Allow USB debugging?”, tick “Always allow "
+                    + "from this computer”, then choose “Allow”.", nil),
                 (.headsetInstall,
-                 "Кнопка «Установить на шлем…» появляется здесь, когда шлем подключён кабелем, "
-                    + "а проверенного ALVR на нём нет.", nil),
-                (.headsetOpenALVR, "В шлеме: кнопка Meta на правом контроллере → меню слева → "
-                    + "«Unknown Sources» (неизвестные источники) → ALVR.", nil),
+                 "“Install on Headset…” shows here when the headset is connected by cable "
+                    + "and has no tested ALVR on it.", nil),
+                (.headsetOpenALVR, "In the headset: the Meta button on the right controller → "
+                    + "the menu on the left → “Unknown Sources” → ALVR.", nil),
             ]
             for (index, (step, text, target)) in cards.enumerated() {
                 XCTAssertEqual(review.phase, .step(step))
                 let hint = try shown(review)
-                XCTAssertEqual(hint.label, "Шлем · обзор, шаг \(index + 1) из 8")
+                XCTAssertEqual(hint.label, "Headset · review, step \(index + 1) of 8")
                 XCTAssertEqual(hint.text, text, "\(step)")
                 XCTAssertEqual(hint.target, target, "\(step)")
                 // No waiting, no "Done", no "Not working?" button.
@@ -751,22 +753,22 @@ final class SetupTourHeadsetTests: XCTestCase {
                 }
                 if step == .headsetAccount {
                     // Both places are taken, so the site is in the list.
-                    XCTAssertEqual(hint.help?.title, "Не получается?")
+                    XCTAssertEqual(hint.help?.title, "Not working?")
                     XCTAssertEqual(hint.help?.options, [.link(.metaDeveloperSignUp)])
-                    XCTAssertEqual(hint.title(of: .link(.metaDeveloperSignUp)), "Открыть сайт Meta")
+                    XCTAssertEqual(hint.title(of: .link(.metaDeveloperSignUp)), "Open Meta's Site")
                 }
                 review.handle(.next)
             }
             XCTAssertEqual(review.phase, .finished)
             XCTAssertTrue(review.isCompleted)
             XCTAssertNil(review.pausedStep)
-            XCTAssertEqual(try shown(review).text, "Глава «Шлем» готова. Дальше — «Варианты запуска».")
+            XCTAssertEqual(try shown(review).text, "The “Headset” chapter is done. Next: “Launch Options”.")
         }
     }
 
     /// What is on the page now is outlined, and spoken of as it is.
     func testAReviewOutlinesWhatIsOnThePageNow() throws {
-        try russian {
+        try english {
             func card(_ step: Step, _ change: (inout LearningFacts) -> Void) throws -> SetupPresentation {
                 var review = try tour(LearningFixture.returning.with { $0.section = .headset }.with(change),
                                       .review)
@@ -776,13 +778,13 @@ final class SetupTourHeadsetTests: XCTestCase {
             // The tools are missing: the button is there.
             var hint = try card(.headsetTools, LearningFixture.headsetScanFailed(LearningFixture.wrapperWithoutADB))
             XCTAssertEqual(hint.target, .headsetGetTools)
-            XCTAssertEqual(hint.text, "Нажмите «Скачать Android Platform Tools…», затем «Принять и скачать».")
+            XCTAssertEqual(hint.text, "Click “Get Android Platform Tools…”, then “Agree and Download”.")
             // Not asked yet, or the question failed: no button, no outline.
             for change in [{ _ in }, LearningFixture.headsetScanFailed(otherError)]
                 as [(inout LearningFacts) -> Void] {
                 hint = try card(.headsetTools, change)
                 XCTAssertNil(hint.target)
-                XCTAssertTrue(hint.text.hasPrefix("Кнопка «Скачать Android Platform Tools…» появляется"))
+                XCTAssertTrue(hint.text.hasPrefix("“Get Android Platform Tools…” shows"))
             }
             // The request is unanswered: the card says so.
             XCTAssertEqual(try card(.headsetDebugging, LearningFixture.headset(.unauthorized)).target,
@@ -791,11 +793,11 @@ final class SetupTourHeadsetTests: XCTestCase {
             // Connected without the tested ALVR: the install button is there.
             hint = try card(.headsetInstall, LearningFixture.headset(.connected))
             XCTAssertEqual(hint.target, .headsetInstall)
-            XCTAssertTrue(hint.text.hasPrefix("Нажмите «Установить на шлем…», затем «Скачать и установить»."))
+            XCTAssertTrue(hint.text.hasPrefix("Click “Install on Headset…”, then “Download and Install”."))
             // With the tested ALVR it is not.
             hint = try card(.headsetInstall, LearningFixture.headsetReady)
             XCTAssertNil(hint.target)
-            XCTAssertTrue(hint.text.hasPrefix("Кнопка «Установить на шлем…» появляется здесь"))
+            XCTAssertTrue(hint.text.hasPrefix("“Install on Headset…” shows here"))
             // The status card is on the page in every state.
             for change in [LearningFixture.headset(.none), LearningFixture.headsetReady, { _ in }]
                 as [(inout LearningFacts) -> Void] {

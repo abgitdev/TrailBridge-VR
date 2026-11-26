@@ -20,16 +20,16 @@ final class DiagnosticRedactionTests: XCTestCase {
     }
 
     func testReplacesDiskNamesAndKeepsTheRestOfThePath() {
-        let redactor = makeRedactor(volumeNames: ["Macintosh HD", "Game Disk", "Мой диск"])
+        let redactor = makeRedactor(volumeNames: ["Macintosh HD", "Game Disk", "Jeux vidéo"])
         let expected = [
             "/Volumes/Game Disk/Games/Blood Trail/BloodTrail.exe":
                 "/Volumes/[disk]/Games/Blood Trail/BloodTrail.exe",
             "The disk /Volumes/Game Disk is not available":
                 "The disk /Volumes/[disk] is not available",
-            "/Volumes/Мой диск/Steam/steamapps/common/Brutalistick VR":
+            "/Volumes/Jeux vidéo/Steam/steamapps/common/Brutalistick VR":
                 "/Volumes/[disk]/Steam/steamapps/common/Brutalistick VR",
             // The same name as the file system may spell it (decomposed).
-            "/Volumes/Мой диск/Steam".decomposedStringWithCanonicalMapping:
+            "/Volumes/Jeux vidéo/Steam".decomposedStringWithCanonicalMapping:
                 "/Volumes/[disk]/Steam",
             // A disk that is not connected now: its name ends at the next slash.
             "cannot open /Volumes/Ada Lovelace SSD/TrailBridge/Bottles/vr":
@@ -81,8 +81,8 @@ final class DiagnosticRedactionTests: XCTestCase {
     func testRedactsUserNamesInWineJSONAndURLForms() {
         let redactor = makeRedactor()
         let expected = [
-            "/Users/ada/Library/Application Support/Игры/Blood Trail/save 1.dat":
-                "~/Library/Application Support/Игры/Blood Trail/save 1.dat",
+            "/Users/ada/Library/Application Support/ゲーム/Blood Trail/save 1.dat":
+                "~/Library/Application Support/ゲーム/Blood Trail/save 1.dat",
             #"Z:\Users\ada\Downloads\Steam Setup.exe"#: #"Z:\Users\[user]\Downloads\Steam Setup.exe"#,
             #"C:\users\ada\AppData\Local\Blood Trail"#: #"C:\users\[user]\AppData\Local\Blood Trail"#,
             // A Wine debug string as JSON holds it: four backslashes each.
@@ -90,7 +90,7 @@ final class DiagnosticRedactionTests: XCTestCase {
             "file:///Users/ada/Library/Logs/a%20b.log": "file://~/Library/Logs/a%20b.log",
             // Another account, or a bottle copied from another Mac.
             "/Users/adam/Games/file": "/Users/[user]/Games/file",
-            #"C:\users\Иван\Documents"#: #"C:\users\[user]\Documents"#,
+            #"C:\users\José\Documents"#: #"C:\users\[user]\Documents"#,
             // The per-user temporary folder is as good as a name.
             "/private/var/folders/8k/2x4zr1tn0ld5xq_wq8kzk9mh0000gn/T/BasaltVR-command-1.log":
                 "/private/var/folders/[user]/T/BasaltVR-command-1.log",
@@ -102,15 +102,15 @@ final class DiagnosticRedactionTests: XCTestCase {
             XCTAssertEqual(redactor.redact(text), redacted)
         }
 
-        let spaced = makeRedactor(home: "/Users/Иван Петров", user: "Иван Петров")
+        let spaced = makeRedactor(home: "/Users/José García", user: "José García")
         XCTAssertEqual(
-            spaced.redact("/Users/Иван Петров/Library/Application Support/BasaltVR"),
+            spaced.redact("/Users/José García/Library/Application Support/BasaltVR"),
             "~/Library/Application Support/BasaltVR")
         XCTAssertEqual(
-            spaced.redact("file:///Users/%D0%98%D0%B2%D0%B0%D0%BD%20%D0%9F%D0%B5%D1%82%D1%80%D0%BE%D0%B2/Library"),
+            spaced.redact("file:///Users/Jos%C3%A9%20Garc%C3%ADa/Library"),
             "file://~/Library")
         XCTAssertEqual(
-            spaced.redact(#"C:\users\Иван Петров\Saved Games\Blood Trail"#),
+            spaced.redact(#"C:\users\José García\Saved Games\Blood Trail"#),
             #"C:\users\[user]\Saved Games\Blood Trail"#)
     }
 
@@ -167,7 +167,7 @@ final class DiagnosticRedactionTests: XCTestCase {
                 "Game audio capture ready: [audio device], 48000 Hz stereo PCM16",
             "  game audio: BlackHole 2ch, 48 kHz stereo PCM16":
                 "  game audio: BlackHole, 48 kHz stereo PCM16",
-            "Restored Mac audio output to AirPods Pro — Иван":
+            "Restored Mac audio output to AirPods Pro — José":
                 "Restored Mac audio output to [audio device]",
             #"Restored Mac audio output to Ada's 27" Display"#:
                 "Restored Mac audio output to [audio device]",
@@ -179,7 +179,7 @@ final class DiagnosticRedactionTests: XCTestCase {
                 + "available: MacBook Pro Microphone, Ivan's iPhone Microphone":
                 "error: No CoreAudio input device contains 'BlackHole'; "
                 + "available: [audio device], [audio device]",
-            "error: Audio device name 'Air' is ambiguous: AirPods Ивана, MacBook Air Microphone":
+            "error: Audio device name 'Air' is ambiguous: AirPods de José, MacBook Air Microphone":
                 "error: Audio device name '[audio device]' is ambiguous: [audio device], [audio device]",
             "error: Could not set 'Ivan's Mixer' to 48000 Hz (CoreAudio status 560947818). "
                 + "Check Audio MIDI Setup.":
@@ -212,7 +212,7 @@ final class DiagnosticRedactionTests: XCTestCase {
         // Every line of a log is seen, not only the first or the last.
         let log = expected.keys.sorted().joined(separator: "\n") + "\n"
         let redacted = redactor.redact(log)
-        for name in ["Ivan", "Иван", "AirPods", "MacBook", "Mixer", "Display", "2ch", "16ch"] {
+        for name in ["Ivan", "José", "AirPods", "MacBook", "Mixer", "Display", "2ch", "16ch"] {
             XCTAssertFalse(redacted.contains(name), name)
         }
         XCTAssertEqual(redacted.components(separatedBy: "\n").count, expected.count + 1)

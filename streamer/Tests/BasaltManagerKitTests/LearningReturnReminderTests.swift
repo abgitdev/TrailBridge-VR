@@ -106,10 +106,10 @@ final class LearningReturnReminderTests: XCTestCase {
     func testTheLineReadsAsAgreed() {
         let previous = L10n.language
         defer { L10n.language = previous }
-        L10n.language = .ru
-        XCTAssertEqual(LearningReturnReminder.text, "Давно не играли? Покажу, как запустить VR")
-        XCTAssertEqual(LearningReturnReminder.showTitle, "Показать")
-        XCTAssertEqual(LearningReturnReminder.closeTitle, "Закрыть")
+        L10n.language = .en
+        XCTAssertEqual(LearningReturnReminder.text, "Been a while? I'll show you how to start VR")
+        XCTAssertEqual(LearningReturnReminder.showTitle, "Show")
+        XCTAssertEqual(LearningReturnReminder.closeTitle, "Close")
         for language in AppLanguage.allCases {
             L10n.language = language
             XCTAssertFalse(LearningReturnReminder.text.isEmpty, "\(language)")

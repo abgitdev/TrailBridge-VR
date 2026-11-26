@@ -7,7 +7,7 @@ final class LearningTopicTests: XCTestCase {
     override func setUp() {
         super.setUp()
         previousLanguage = L10n.language
-        L10n.language = .ru
+        L10n.language = .en
     }
 
     override func tearDown() {
@@ -44,14 +44,15 @@ final class LearningTopicTests: XCTestCase {
     func testThePageListsThreeTroubleTopicsAndThreeUnderMore() {
         XCTAssertEqual(LearningTopic.Group.trouble.topics, [.launchFailed, .noSound, .report])
         XCTAssertEqual(LearningTopic.Group.more.topics, [.interface, .graphics, .connection])
-        XCTAssertEqual(LearningTopic.Group.trouble.title, "Если что-то не работает")
-        XCTAssertEqual(LearningTopic.Group.more.title, "Ещё")
+        XCTAssertEqual(LearningTopic.Group.trouble.title, "If something does not work")
+        XCTAssertEqual(LearningTopic.Group.more.title, "More")
         XCTAssertEqual(LearningTopic.allCases.map(\.title), [
-            "Запуск не удался", "Нет звука в шлеме", "Нужна помощь",
-            "Интерфейс", "Графика", "Подключение",
+            "The launch failed", "No sound in the headset", "Getting help",
+            "The interface", "Graphics", "Connection",
         ])
-        XCTAssertEqual(LearningTopic.launchFailed.purpose, "Где написана причина и где кнопка «Как исправить».")
-        XCTAssertEqual(LearningTopic.showTitle, "Показать")
+        XCTAssertEqual(LearningTopic.launchFailed.purpose,
+                       "Where the cause is written and where the “How to Fix” button is.")
+        XCTAssertEqual(LearningTopic.showTitle, "Show")
     }
 
     func testEveryTopicHasANameAndAPurposeInEveryLanguage() {
@@ -74,8 +75,8 @@ final class LearningTopicTests: XCTestCase {
         var tour = tour(.launchFailed)
         XCTAssertEqual(tour.steps, [.failedCause, .failedFix])
         var hint = try shown(tour)
-        XCTAssertEqual(hint.label, "Запуск не удался · шаг 1 из 2")
-        XCTAssertEqual(hint.text, "Если запуск не удался, причина написана здесь, в разделе «Трансляция», под этой меткой.")
+        XCTAssertEqual(hint.label, "The launch failed · step 1 of 2")
+        XCTAssertEqual(hint.text, "If a launch fails, the cause is written here, in “Stream”, under this label.")
         XCTAssertEqual(hint.target, .streamStatus)
         XCTAssertEqual(hint.section, .stream)
         XCTAssertEqual(hint.buttons, [.next])
@@ -83,8 +84,9 @@ final class LearningTopicTests: XCTestCase {
 
         tour.handle(.next)
         hint = try shown(tour)
-        XCTAssertEqual(hint.label, "Запуск не удался · шаг 2 из 2")
-        XCTAssertEqual(hint.text, "У частых ошибок под причиной появляется кнопка «Как исправить». Она пишет, что нажать.")
+        XCTAssertEqual(hint.label, "The launch failed · step 2 of 2")
+        XCTAssertEqual(hint.text,
+                       "For common failures a “How to Fix” button appears under the cause. It says what to press.")
         // No failure is on screen, so there is no button to point at.
         XCTAssertNil(hint.target)
         XCTAssertEqual(hint.buttons, [.back, .done])
@@ -114,7 +116,9 @@ final class LearningTopicTests: XCTestCase {
         tour.handle(.next)
         let hint = try shown(tour)
         XCTAssertEqual(hint.target, .streamHowToFix)
-        XCTAssertEqual(hint.text, "Сейчас причина — «На шлеме нет ALVR». Нажмите «Как исправить» под ней: подсказка скажет, что сделать.")
+        XCTAssertEqual(hint.text,
+                       "The cause now is “ALVR is not on the headset”. Click “How to Fix” under "
+                       + "it: the hint says what to do.")
         XCTAssertNil(hint.list)
         // The failure goes: the button is no longer there to point at.
         feed(&tour) {
@@ -131,20 +135,26 @@ final class LearningTopicTests: XCTestCase {
         var tour = tour(.noSound)
         XCTAssertEqual(tour.steps, [.soundChoice, .soundFront, .soundBlackHole])
         var hint = try shown(tour)
-        XCTAssertEqual(hint.label, "Нет звука в шлеме · шаг 1 из 3")
-        XCTAssertEqual(hint.text, "Проверьте список «Звук игры». Обычный выбор — «Звук Mac». Изменение подействует со следующего запуска.")
+        XCTAssertEqual(hint.label, "No sound in the headset · step 1 of 3")
+        XCTAssertEqual(hint.text,
+                       "Check the “Game audio” list. The usual choice is “Mac audio”. A change "
+                       + "takes effect at the next launch.")
         XCTAssertEqual(hint.target, .settingsGameAudio)
         XCTAssertEqual(hint.section, .settings)
 
         tour.handle(.next)
         hint = try shown(tour)
-        XCTAssertEqual(hint.text, "Окно игры на Mac должно быть впереди: без этого игры замолкают. TrailBridge сам возвращает его, пока вы не трогаете Mac.")
+        XCTAssertEqual(hint.text,
+                       "The game's window must be in front on the Mac: without that, games go silent. "
+                       + "TrailBridge brings it back by itself while you leave the Mac alone.")
         XCTAssertNil(hint.target)
         XCTAssertEqual(hint.buttons, [.back, .next])
 
         tour.handle(.next)
         hint = try shown(tour)
-        XCTAssertEqual(hint.text, "Запасной вариант — BlackHole. Он ставится отдельно: «Скачать BlackHole…» ниже, затем перезагрузите Mac и выберите его в списке.")
+        XCTAssertEqual(hint.text,
+                       "The fallback is BlackHole. It is installed separately: “Get BlackHole…” "
+                       + "below, then restart the Mac and choose it in the list.")
         XCTAssertEqual(hint.target, .settingsGameAudio)
         XCTAssertEqual(hint.buttons, [.back, .done])
     }
@@ -155,7 +165,8 @@ final class LearningTopicTests: XCTestCase {
         tour.handle(.next)
         tour.handle(.next)
         let text = try shown(tour).text
-        XCTAssertEqual(text, "Запасной вариант — BlackHole: если при «Звук Mac» звука нет, выберите его в этом списке.")
+        XCTAssertEqual(text,
+                       "The fallback is BlackHole: choose it in this list if there is no sound with “Mac audio”.")
         XCTAssertFalse(text.contains(L10n.string(.settingsGetBlackHole)))
     }
 
@@ -165,8 +176,10 @@ final class LearningTopicTests: XCTestCase {
         var tour = tour(.report)
         let hint = try shown(tour)
         // One hint: no "step 1 of 1".
-        XCTAssertEqual(hint.label, "Нужна помощь")
-        XCTAssertEqual(hint.text, "Нужна помощь? Нажмите «Создать отчёт…». Личные данные заменяются метками. Просмотрите отчёт перед отправкой.")
+        XCTAssertEqual(hint.label, "Getting help")
+        XCTAssertEqual(hint.text,
+                       "Need help? Click “Create report…”. Personal data is replaced with labels. "
+                       + "Look through the report before you send it.")
         XCTAssertEqual(hint.target, .settingsCreateReport)
         XCTAssertEqual(hint.section, .settings)
         XCTAssertEqual(hint.buttons, [.done])
@@ -205,8 +218,8 @@ final class LearningTopicTests: XCTestCase {
         var tour = tour(.interface)
         XCTAssertEqual(tour.steps, [.interfaceStream, .interfaceCard])
         var hint = try shown(tour)
-        XCTAssertEqual(hint.label, "Интерфейс · шаг 1 из 2")
-        XCTAssertEqual(hint.text, "Здесь запускают игру и следят за сеансом. Нажмите «Трансляция».")
+        XCTAssertEqual(hint.label, "The interface · step 1 of 2")
+        XCTAssertEqual(hint.text, "Games are started and sessions are watched here. Click “Stream”.")
         XCTAssertEqual(hint.target, .sidebarStream)
         // The sidebar is on every page: no section is opened for the user.
         XCTAssertNil(hint.section)
@@ -214,7 +227,8 @@ final class LearningTopicTests: XCTestCase {
 
         tour.handle(.next)
         hint = try shown(tour)
-        XCTAssertEqual(hint.text, "Эта карточка всегда показывает, идёт ли VR. Во время игры в ней есть кнопка «Остановить».")
+        XCTAssertEqual(hint.text,
+                       "This card always shows whether VR is running. During a game it has a “Stop” button.")
         XCTAssertEqual(hint.target, .sidebarSession)
         XCTAssertNil(hint.section)
         XCTAssertEqual(hint.buttons, [.back, .done])
@@ -263,10 +277,10 @@ final class LearningTopicTests: XCTestCase {
         var tour = tour(.graphics)
         XCTAssertEqual(tour.steps, [.graphicsRecommended])
         var hint = try shown(tour)
-        XCTAssertEqual(hint.label, "Графика")
+        XCTAssertEqual(hint.label, "Graphics")
         XCTAssertEqual(hint.target, .settingsUseRecommended)
         XCTAssertEqual(hint.section, .settings)
-        XCTAssertEqual(hint.text, L10n.string(.learningOptionsRecommended, "Использовать рекомендуемое"))
+        XCTAssertEqual(hint.text, L10n.string(.learningOptionsRecommended, "Use recommended"))
         XCTAssertEqual(hint.buttons, [.done])
         // The button was pressed: the same hint says so.
         feed(&tour) {
@@ -275,32 +289,39 @@ final class LearningTopicTests: XCTestCase {
         }
         hint = try shown(tour)
         XCTAssertEqual(hint.id, "topic-graphicsRecommended")
-        XCTAssertEqual(hint.text, L10n.string(.learningOptionsRecommendedSet, "Использовать рекомендуемое"))
+        XCTAssertEqual(hint.text, L10n.string(.learningOptionsRecommendedSet, "Use recommended"))
         XCTAssertNil(hint.section)
     }
 
     // MARK: - Connection
 
     func testConnectionSaysWhenToChooseWhich() throws {
+        L10n.language = .ru
+        let wifi = L10n.string(.connectionWiFi, language: .ru, arguments: [])
+        let usb = L10n.string(.connectionUSB, language: .ru, arguments: [])
+        let title = L10n.string(.streamConnection, language: .ru, arguments: [])
+        let label = L10n.string(.learningChapterStepLabel, language: .ru, arguments: [title, Int64(1), Int64(2)])
         var tour = tour(.connection)
         XCTAssertEqual(tour.steps, [.connectionWiFi, .connectionUSB])
         var hint = try shown(tour)
-        XCTAssertEqual(hint.label, "Подключение · шаг 1 из 2")
-        XCTAssertEqual(hint.text, "Wi‑Fi — без провода. Подходит, если роутер мощный (Wi‑Fi 6E или 7) и стоит рядом, в той же комнате.")
+        XCTAssertEqual(hint.label, label)
+        XCTAssertEqual(hint.text, L10n.string(.learningConnectionWiFi, language: .ru, arguments: [wifi]))
         XCTAssertEqual(hint.target, .settingsConnection)
         XCTAssertEqual(hint.section, .settings)
         tour.handle(.next)
         hint = try shown(tour)
-        XCTAssertEqual(hint.text, "USB-кабель — если роутер слабый или далеко: картинка будет ровнее, без рывков от сети.")
+        XCTAssertEqual(hint.text, L10n.string(.learningConnectionUSB, language: .ru, arguments: [usb]))
         XCTAssertEqual(hint.target, .settingsConnection)
         XCTAssertEqual(hint.buttons, [.back, .done])
 
         L10n.language = .en
         XCTAssertEqual(try shown(tour).text,
-                       "USB Cable — when the router is weak or far away: the picture stays smoother, without network stutter.")
+                       "USB Cable — when the router is weak or far away: the picture stays smoother, "
+                       + "without network stutter.")
         tour.handle(.back)
         XCTAssertEqual(try shown(tour).text,
-                       "Wi-Fi — no cable. Choose it when the router is strong (Wi-Fi 6E or 7) and close, in the same room.")
+                       "Wi-Fi — no cable. Choose it when the router is strong (Wi-Fi 6E or 7) and "
+                       + "close, in the same room.")
     }
 
     // MARK: - A game with its own settings
@@ -319,18 +340,20 @@ final class LearningTopicTests: XCTestCase {
         XCTAssertEqual(try shown(tour).buttons, [.next])
         tour.handle(.next)
         let hint = try shown(tour)
-        XCTAssertEqual(hint.label, "Графика · шаг 2 из 2")
-        XCTAssertEqual(hint.text, "У игры «Blood Trail» свои настройки: «Качество» для неё меняется в «Изменить…» → «Настройки трансляции для …».")
+        XCTAssertEqual(hint.label, "Graphics · step 2 of 2")
+        XCTAssertEqual(hint.text,
+                       "“Blood Trail” has its own settings: “Quality” is changed for it in "
+                       + "“Change…”, then “Stream Settings for …”.")
         XCTAssertNil(hint.target)
         XCTAssertEqual(hint.buttons, [.back, .done])
 
         var sound = self.tour(.noSound, own)
         sound.handle(.next)
-        XCTAssertTrue(try shown(sound).text.contains("«Звук игры» для неё меняется"))
+        XCTAssertTrue(try shown(sound).text.contains("“Game audio” is changed for it"))
         var connection = self.tour(.connection, own)
         connection.handle(.next)
         connection.handle(.next)
-        XCTAssertTrue(try shown(connection).text.contains("«Подключение» для неё меняется"))
+        XCTAssertTrue(try shown(connection).text.contains("“Connection” is changed for it"))
     }
 
     func testAHintAboutOwnSettingsGoesWhenTheGameLosesThem() throws {
@@ -526,20 +549,24 @@ final class LearningTopicTests: XCTestCase {
     func testThereAreExactlyFourBadgesBesideTheirControls() {
         XCTAssertEqual(LearningHelpBadge.allCases, [.connection, .quality, .gameAudio, .openVR])
         XCTAssertEqual(LearningHelpBadge.allCases.map(\.controlTitle),
-                       ["Подключение", "Качество", "Звук игры", "Поддержка OpenVR"])
-        XCTAssertEqual(LearningHelpBadge.quality.label, "Что это: Качество")
+                       ["Connection", "Quality", "Game audio", "OpenVR support"])
+        XCTAssertEqual(LearningHelpBadge.quality.label, "What is this: Quality")
     }
 
-    func testRussianBadgeTexts() {
+    func testEnglishBadgeTexts() {
         XCTAssertEqual(LearningHelpBadge.connection.text,
-                       "Wi‑Fi — без провода. Подходит, если роутер мощный (Wi‑Fi 6E или 7) и стоит рядом, в той же комнате. "
-                       + "USB-кабель — если роутер слабый или далеко: картинка будет ровнее, без рывков от сети.")
+                       "Wi-Fi — no cable. Choose it when the router is strong (Wi-Fi 6E or 7) and "
+                       + "close, in the same room. USB Cable — when the router is weak or far away: "
+                       + "the picture stays smoother, without network stutter.")
         XCTAssertEqual(LearningHelpBadge.quality.text,
-                       "Выше качество — чётче картинка и больше работы для Mac. Не знаете, что выбрать — нажмите «Использовать рекомендуемое».")
+                       "Higher quality means a sharper picture and more work for the Mac. If you are "
+                       + "not sure, click “Use recommended”.")
         XCTAssertEqual(LearningHelpBadge.gameAudio.text,
-                       "Откуда брать звук игры для шлема. Обычный выбор — «Звук Mac»; BlackHole — запасной вариант.")
+                       "Where the game's sound for the headset comes from. The usual choice is "
+                       + "“Mac audio”; BlackHole is the fallback.")
         XCTAssertEqual(LearningHelpBadge.openVR.text,
-                       "Плагин позволяет игре, сделанной для SteamVR, работать без SteamVR. Включайте его, если у игры метка «Настроить OpenVR».")
+                       "The plug-in lets a game made for SteamVR run without SteamVR. Turn it on when "
+                       + "the game's label says “SET UP OPENVR”.")
     }
 
     func testBadgesAreShortAndNameControlsInEveryLanguage() {

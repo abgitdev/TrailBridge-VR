@@ -340,7 +340,7 @@ final class GameFolderCopyTests: XCTestCase {
     }
 
     func testFolderNamesFollowWindowsRules() {
-        for valid in ["Beat Saber", "hello-xr", "hello_xr 2", "Игра", "COM10", "CONSOLE",
+        for valid in ["Beat Saber", "hello-xr", "hello_xr 2", "ゲーム", "COM10", "CONSOLE",
                       "a.b", String(repeating: "x", count: GameFolderName.maximumLength)] {
             XCTAssertNil(GameFolderName.problem(with: valid), valid)
             XCTAssertEqual(try GameFolderName.validate(valid), valid)

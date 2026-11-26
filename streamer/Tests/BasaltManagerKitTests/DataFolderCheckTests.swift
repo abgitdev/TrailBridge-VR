@@ -377,12 +377,16 @@ final class DataFolderCheckTests: XCTestCase {
             text.replacingOccurrences(of: "\u{00A0}", with: " ").replacingOccurrences(of: "\u{202F}", with: " ")
         }
         let external = DataFolderVolume(kind: .external, freeBytes: 812_000_000_000)
+        // The free space is written for the app's language, not always in English units.
         L10n.language = .ru
-        XCTAssertEqual(plain(external.summary), "Внешний диск · свободно 812 ГБ")
-        XCTAssertEqual(DataFolderVolume(kind: .network, freeBytes: nil).summary, "Сетевое хранилище")
-        XCTAssertEqual(DataFolderKind.thisMac.name, "Диск этого Mac")
+        let disk = L10n.string(.dataFolderKindExternal, language: .ru, arguments: [])
+        let free = Int64(812_000_000_000).formatted(.byteCount(style: .file).locale(Locale(identifier: "ru")))
+        let summary = L10n.string(.dataFolderKindAndFree, language: .ru, arguments: [disk, free])
+        XCTAssertEqual(plain(external.summary), plain(summary))
         L10n.language = .en
         XCTAssertEqual(plain(external.summary), "External disk · 812 GB free")
+        XCTAssertEqual(DataFolderVolume(kind: .network, freeBytes: nil).summary, "Network storage")
+        XCTAssertEqual(DataFolderKind.thisMac.name, "This Mac’s disk")
         XCTAssertEqual(DataFolderVolume(kind: .thisMac, freeBytes: nil).summary, "This Mac’s disk")
     }
 
@@ -407,19 +411,17 @@ final class DataFolderCheckTests: XCTestCase {
             XCTAssertTrue(DataFolderProblem.fat32.message.contains("FAT32"), "\(language)")
             XCTAssertTrue(DataFolderProblem.fat32.message.contains("exFAT"), "\(language)")
         }
-        L10n.language = .ru
-        XCTAssertEqual(DataFolderProblem.noSymbolicLinks.message,
-                       "Диск с этой папкой не поддерживает символические ссылки, а без них окружения для игр "
-                       + "не создать. Так бывает в некоторых сетевых папках. Подойдёт диск в формате APFS "
-                       + "или Mac OS Extended.")
-        XCTAssertEqual(DataFolderProblem.fat32.message,
-                       "Диск с этой папкой в формате FAT32: в нём нельзя хранить файлы больше 4 ГБ, а у игр "
-                       + "такие файлы есть. Подойдёт APFS, Mac OS Extended или exFAT.")
-        XCTAssertTrue(DataFolderProblem.accessDenied.message.contains(
-            "Системные настройки › Конфиденциальность и безопасность › Файлы и папки"))
         L10n.language = .en
-        XCTAssertTrue(DataFolderProblem.accessDenied.message.contains(
-            "System Settings › Privacy & Security › Files and Folders"))
+        XCTAssertEqual(DataFolderProblem.noSymbolicLinks.message,
+                       "The disk with this folder does not support symbolic links, and game environments cannot "
+                       + "be created without them. This happens on some network shares. A disk formatted as APFS "
+                       + "or Mac OS Extended will work.")
+        XCTAssertEqual(DataFolderProblem.fat32.message,
+                       "The disk with this folder is formatted as FAT32: it cannot hold files larger than 4 GB, "
+                       + "and games have such files. APFS, Mac OS Extended or exFAT will work.")
+        XCTAssertEqual(DataFolderProblem.accessDenied.message,
+                       "macOS does not let TrailBridge use this folder. Allow access in "
+                       + "System Settings › Privacy & Security › Files and Folders.")
     }
 }
 

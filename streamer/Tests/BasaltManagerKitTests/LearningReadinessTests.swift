@@ -107,7 +107,7 @@ final class LearningReadinessTests: XCTestCase {
         // "Checking…", whatever an earlier poll answered.
         let previous = L10n.language
         defer { L10n.language = previous }
-        L10n.language = .ru
+        L10n.language = .en
         for polled in [false, true] {
             var snapshot = LearningReadinessSnapshot()
             snapshot.connection = .wired
@@ -118,7 +118,7 @@ final class LearningReadinessTests: XCTestCase {
             XCTAssertEqual(headset.status, .info)
             XCTAssertEqual(headset.detail, .usbNotChecked)
             XCTAssertEqual(headset.connection, .wired)
-            XCTAssertEqual(headset.text, "Не проверено")
+            XCTAssertEqual(headset.text, "Not checked")
         }
     }
 
@@ -385,22 +385,22 @@ final class LearningReadinessTests: XCTestCase {
 
     // MARK: - Texts
 
-    func testRussianTexts() throws {
+    func testEnglishTexts() throws {
         let previous = L10n.language
         defer { L10n.language = previous }
-        L10n.language = .ru
+        L10n.language = .en
 
-        XCTAssertEqual(L10n.string(.learningTitle), "Обучение")
-        XCTAssertEqual(L10n.string(.learningReadyTitle), "Готов к VR")
-        XCTAssertEqual(L10n.string(.learningQuickPathTitle), "Как снова запустить VR")
+        XCTAssertEqual(L10n.string(.learningTitle), "Learning")
+        XCTAssertEqual(L10n.string(.learningReadyTitle), "Ready for VR")
+        XCTAssertEqual(L10n.string(.learningQuickPathTitle), "How to Start VR Again")
 
         var snapshot = LearningReadinessSnapshot()
         snapshot.connection = .wired
         var readiness = LearningReadiness(snapshot)
-        XCTAssertEqual(readiness.rows.map(\.title), ["Mac", "Шлем", "Игра", "Звук"])
+        XCTAssertEqual(readiness.rows.map(\.title), ["Mac", "Headset", "Game", "Audio"])
         XCTAssertEqual(readiness.rows.map(\.text),
-                       ["Проверяем…", "Проверяем…", "Пока нет готовых игр", "Без звука игры"])
-        XCTAssertEqual(readiness.rows.map(\.caption), [nil, "USB-кабель", nil, nil])
+                       ["Checking…", "Checking…", "No games ready yet", "No game audio"])
+        XCTAssertEqual(readiness.rows.map(\.caption), [nil, "USB Cable", nil, nil])
 
         snapshot.setupCheckFailed = true
         snapshot.headsetPolled = true
@@ -408,60 +408,66 @@ final class LearningReadinessTests: XCTestCase {
         snapshot.audioDeviceName = "BlackHole 2ch"
         readiness = LearningReadiness(snapshot)
         XCTAssertEqual(readiness.rows.map(\.text),
-                       ["Не удалось проверить", "Не удалось проверить", "Пока нет готовых игр",
-                        "BlackHole 2ch (недоступно)"])
+                       ["Could not check", "Could not check", "No games ready yet",
+                        "BlackHole 2ch (unavailable)"])
 
         snapshot.setupCheckFailed = false
         snapshot.headsetPollFailed = false
         snapshot.setupChecks = [check("engine", .actionNeeded), check("runtime", .actionNeeded)]
         let usbTexts: [(HeadsetStatus, String)] = [
-            (HeadsetStatus(connection: .noTools), "Нужны инструменты USB"),
-            (HeadsetStatus(connection: .none), "Шлем не подключён по USB"),
-            (HeadsetStatus(connection: .unauthorized), "Нужно разрешить отладку по USB"),
-            (HeadsetStatus(connection: .connected), "Шлем подключён по USB"),
-            (HeadsetStatus(connection: .connected, clientInstalled: true), "Шлем подключён по USB"),
+            (HeadsetStatus(connection: .noTools), "USB tools needed"),
+            (HeadsetStatus(connection: .none), "No headset connected by USB"),
+            (HeadsetStatus(connection: .unauthorized), "USB debugging approval needed"),
+            (HeadsetStatus(connection: .connected), "Headset connected by USB"),
+            (HeadsetStatus(connection: .connected, clientInstalled: true), "Headset connected by USB"),
         ]
         for (status, text) in usbTexts {
             snapshot.headsetStatus = status
             XCTAssertEqual(try row(.headset, snapshot).text, text)
         }
-        XCTAssertEqual(try row(.mac, snapshot).text, "Не хватает обязательных пунктов: 2")
+        XCTAssertEqual(try row(.mac, snapshot).text, "Missing required steps: 2")
 
         snapshot.setupChecks = [check("engine", .ready)]
-        XCTAssertEqual(try row(.mac, snapshot).text, "Готово")
+        XCTAssertEqual(try row(.mac, snapshot).text, "Ready")
 
         snapshot.connection = .wifi
-        XCTAssertEqual(try row(.headset, snapshot).text, "Не проверено")
+        XCTAssertEqual(try row(.headset, snapshot).text, "Not checked")
         XCTAssertEqual(try row(.headset, snapshot).caption, L10n.string(.connectionWiFi))
         let date = Date(timeIntervalSince1970: 1_800_000_000)
         snapshot.sessionHistory = [session(.wifi, started: 1_799_999_000, streaming: 1_800_000_000)]
-        XCTAssertEqual(try row(.headset, snapshot).text, "Последний сеанс: \(Row.dateText(date))")
-        XCTAssertEqual(Row.dateText(date, timeZone: try XCTUnwrap(TimeZone(identifier: "UTC"))),
-                       "15 янв, 08:00")
+        XCTAssertEqual(try row(.headset, snapshot).text, "Last session: \(Row.dateText(date))")
+        let utc = try XCTUnwrap(TimeZone(identifier: "UTC"))
+        XCTAssertEqual(Row.dateText(date, timeZone: utc), "Jan 15, 08:00")
+        // Month names come from the app's own table, not from the system's locale data.
+        L10n.language = .ru
+        let months = L10n.string(.streamHistoryMonths, language: .ru).components(separatedBy: "|")
+        XCTAssertEqual(months.count, 12)
+        XCTAssertEqual(Row.dateText(date, timeZone: utc), "15 \(months[0]), 08:00")
+        L10n.language = .en
 
         snapshot.gameName = "Blood Trail"
         snapshot.openVRBadge = .needsSetup
         XCTAssertEqual(try row(.game, snapshot).note,
-                       "У игры метка «Настроить OpenVR». Это догадка по файлам игры, запуску она не мешает. "
-                        + "Если игра не появится в шлеме, нажмите эту метку в разделе «Библиотека». "
-                        + "Если сеанс идёт, сначала нажмите «Остановить».")
+                       "This game is marked “SET UP OPENVR”. That is a guess from the game's files "
+                        + "and does not stop the launch. If the game does not appear in the headset, "
+                        + "click that label in “Library”. If a session is running, click “Stop” first.")
     }
 
-    func testRussianButtonTitlesAndNotes() {
+    func testEnglishButtonTitlesAndNotes() {
         let previous = L10n.language
         defer { L10n.language = previous }
-        L10n.language = .ru
+        L10n.language = .en
         let cases: [(LearningPrimaryAction, String, String?)] = [
-            (.startQuickPath, "Запустить VR по шагам", nil),
-            (.open(.setup), "Открыть подготовку", nil),
-            (.open(.library), "Открыть библиотеку", nil),
-            (.open(.stream), "Открыть страницу трансляции", "Сеанс VR уже идёт."),
-            (.open(.headset), "Открыть «Шлем»", nil),
-            (.stopWindowsApp, "Остановить",
-             "Открыта программа Windows: Steam или установщик. Остановите её, чтобы запустить VR."),
-            (.recheck, "Проверить снова", nil),
-            (.wait(.checking), "Проверяем…", nil),
-            (.wait(.importRunning), "Запустить VR по шагам", "Идёт добавление игры. Дождитесь окончания."),
+            (.startQuickPath, "Start VR Step by Step", nil),
+            (.open(.setup), "Open Setup", nil),
+            (.open(.library), "Open Library", nil),
+            (.open(.stream), "Open the Stream dashboard", "A VR session is already running."),
+            (.open(.headset), "Open “Headset”", nil),
+            (.stopWindowsApp, "Stop",
+             "A Windows app is open: Steam or an installer. Stop it to start VR."),
+            (.recheck, "Check Again", nil),
+            (.wait(.checking), "Checking…", nil),
+            (.wait(.importRunning), "Start VR Step by Step", "A game is being added. Wait until it finishes."),
         ]
         for (action, title, note) in cases {
             XCTAssertEqual(action.title, title)
@@ -529,9 +535,9 @@ final class LearningReadinessTests: XCTestCase {
 
         let previous = L10n.language
         defer { L10n.language = previous }
-        L10n.language = .ru
-        XCTAssertEqual(action.title, "Запустить VR по шагам")
-        XCTAssertEqual(action.note, "Steam скачивает игру: не останавливайте Steam и не закрывайте TrailBridge.")
+        L10n.language = .en
+        XCTAssertEqual(action.title, "Start VR Step by Step")
+        XCTAssertEqual(action.note, "Steam is downloading a game. Do not stop Steam or quit TrailBridge.")
         for language in AppLanguage.allCases {
             L10n.language = language
             XCTAssertFalse(action.title.isEmpty, "\(language)")

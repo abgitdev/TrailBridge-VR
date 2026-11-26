@@ -32,8 +32,7 @@ elif [[ -x "$managed_adb" ]]; then
     export ADB_SERVER_SOCKET=tcp:localhost:5039
 else
     # The first sentence is AlvrWiredFailure.adbMissing, which the app recognizes.
-    print -u2 "Could not find adb; open Headset in TrailBridge and choose Get Android Platform Tools." \
-        "In Russian the button is «Скачать Android Platform Tools…»."
+    print -u2 "Could not find adb; open Headset in TrailBridge and choose Get Android Platform Tools."
     exit 1
 fi
 export ADB_MDNS_AUTO_CONNECT=0

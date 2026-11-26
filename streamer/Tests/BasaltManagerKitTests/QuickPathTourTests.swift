@@ -655,15 +655,15 @@ final class QuickPathTourTests: XCTestCase {
     func testAnOpenPageSheetKeepsTheSectionAndAsksToCloseIt() throws {
         let previous = L10n.language
         defer { L10n.language = previous }
-        L10n.language = .ru
+        L10n.language = .en
         let sheet = QuickPathEnvironment(onStreamSection: false, pageSheetOpen: true)
         for state in [tour(.done), tour(.done, .session(.starting))] {
             let shown = try XCTUnwrap(state.presentation(in: sheet))
             XCTAssertFalse(shown.opensStream)
             XCTAssertNil(shown.target)
             XCTAssertEqual(shown.buttons, [.back, .checkAgain])
-            XCTAssertEqual(shown.text, "Закройте открытое окно, затем нажмите «Проверить снова».")
-            XCTAssertEqual(shown.title(of: .checkAgain), "Проверить снова")
+            XCTAssertEqual(shown.text, "Close the open window, then click “Check Again”.")
+            XCTAssertEqual(shown.title(of: .checkAgain), "Check Again")
         }
         // A sheet on the Stream page itself needs no section change.
         let onStreamWithSheet = QuickPathEnvironment(onStreamSection: true, pageSheetOpen: true)
@@ -672,67 +672,96 @@ final class QuickPathTourTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(tour().presentation(in: sheet)).buttons, [.done])
     }
 
-    func testRussianTexts() throws {
+    func testEnglishTexts() throws {
         let previous = L10n.language
         defer { L10n.language = previous }
-        L10n.language = .ru
+        L10n.language = .en
 
         let wifi = try XCTUnwrap(tour(connection: .wifi).presentation(in: onStream))
-        XCTAssertEqual(wifi.label, "Порядок запуска · \(L10n.string(.connectionWiFi))")
-        XCTAssertEqual(wifi.text, "Откройте ALVR в шлеме → снимите шлем → «Играть» → "
-            + "в первый раз «Разрешить» → наденьте шлем.")
-        XCTAssertEqual(wifi.title(of: .done), "Готово")
+        XCTAssertEqual(wifi.label, "Launch order · \(L10n.string(.connectionWiFi))")
+        XCTAssertEqual(wifi.text, "Open ALVR in the headset → take the headset off → “Play” → "
+            + "the first time, “Allow” → put the headset on.")
+        XCTAssertEqual(wifi.title(of: .done), "Done")
         let usb = try XCTUnwrap(tour(connection: .wired).presentation(in: onStream))
-        XCTAssertEqual(usb.label, "Порядок запуска · USB-кабель")
-        XCTAssertEqual(usb.text, "Подключите кабель. ALVR откроется сам после «Играть». "
-            + "Шлем должен быть разблокирован.")
+        XCTAssertEqual(usb.label, "Launch order · USB Cable")
+        XCTAssertEqual(usb.text, "Connect the cable. ALVR opens by itself after “Play”. "
+            + "The headset must be unlocked.")
 
         let play = try XCTUnwrap(tour(.done).presentation(in: onStream))
-        XCTAssertEqual(play.label, "Шаг 1 из 3")
-        XCTAssertEqual(play.text, "Нажмите «Играть».")
-        XCTAssertEqual(play.buttons.map(play.title(of:)), ["Назад", "Не получается?"])
+        XCTAssertEqual(play.label, "Step 1 of 3")
+        XCTAssertEqual(play.text, "Click “Play”.")
+        XCTAssertEqual(play.buttons.map(play.title(of:)), ["Back", "Not working?"])
         XCTAssertEqual(play.help?.tips, [
-            "Кнопка «Играть» недоступна, пока открыта программа Windows (Steam или установщик) "
-                + "или добавляется игра. Нажмите «Остановить» или дождитесь окончания.",
+            "“Play” is not available while a Windows app (Steam or an installer) is open "
+                + "or a game is being added. Click “Stop”, or wait until it finishes.",
         ])
         XCTAssertEqual(play.help?.options, [])
 
         let wait = try XCTUnwrap(tour(.done, .session(.starting)).presentation(in: onStream))
-        XCTAssertEqual(wait.label, "Шаг 2 из 3")
-        XCTAssertEqual(wait.text, "Подождите «В ЭФИРЕ». Если Mac спросит «Разрешить подключение …?» — "
-            + "нажмите «Разрешить». Если открылось окно Steam — войдите.")
+        XCTAssertEqual(wait.label, "Step 2 of 3")
+        XCTAssertEqual(wait.text, "Wait for “LIVE”. If your Mac asks “Allow … to connect?”, "
+            + "click “Allow”. If a Steam window opens, sign in.")
         XCTAssertEqual(wait.help?.tips, [
-            "Проверьте, что в шлеме открыт ALVR.",
-            "Если Mac спросил «Разрешить подключение …?» — нажмите «Разрешить».",
-            "Если открылось окно Steam — войдите.",
+            "Check that ALVR is open in the headset.",
+            "If your Mac asks “Allow … to connect?”, click “Allow”.",
+            "If a Steam window opened, sign in.",
         ])
         let usbWait = try XCTUnwrap(
             tour(connection: .wired, .done, .session(.starting)).presentation(in: onStream))
-        XCTAssertEqual(usbWait.label, "Шаг 2 из 3")
-        XCTAssertEqual(usbWait.text, "Подождите «В ЭФИРЕ». Если открылось окно Steam — войдите.")
+        XCTAssertEqual(usbWait.label, "Step 2 of 3")
+        XCTAssertEqual(usbWait.text, "Wait for “LIVE”. If a Steam window opens, sign in.")
         XCTAssertEqual(usbWait.help?.tips, [
-            "Наденьте шлем и разблокируйте его.",
-            "Если открылось окно Steam — войдите.",
+            "Put on the headset and unlock it.",
+            "If a Steam window opened, sign in.",
         ])
 
         let picture = try XCTUnwrap(
             tour(.done, .session(.starting), .session(.live)).presentation(in: onStream))
-        XCTAssertEqual(picture.label, "Шаг 3 из 3")
-        XCTAssertEqual(picture.text, "Картинка идёт в шлем. Наденьте шлем. Закончить — «Остановить».")
-        XCTAssertEqual(picture.buttons.map(picture.title(of:)), ["Назад", "Не видите игру?"])
+        XCTAssertEqual(picture.label, "Step 3 of 3")
+        XCTAssertEqual(picture.text, "The picture is going to the headset. Put the headset on. "
+            + "To finish, click “Stop”.")
+        XCTAssertEqual(picture.buttons.map(picture.title(of:)), ["Back", "Can't see the game?"])
         XCTAssertEqual(picture.help?.tips, [
-            "Если в разделе «Библиотека» у игры метка «Настроить OpenVR»: нажмите «Остановить», "
-                + "затем эту метку, включите «Поддержка OpenVR» и снова нажмите «Играть».",
-            "Проверьте, что в шлеме открыт ALVR.",
-            "Шлем должен быть включён и разблокирован.",
+            "If the game in “Library” has the “SET UP OPENVR” label: click “Stop”, "
+                + "then that label, turn on “OpenVR support”, and click “Play” again.",
+            "Check that ALVR is open in the headset.",
+            "The headset must be awake and unlocked.",
         ])
-        XCTAssertEqual(picture.help?.options.map(picture.title(of:)), ["Пропустить шаг"])
+        XCTAssertEqual(picture.help?.options.map(picture.title(of:)), ["Skip This Step"])
         // The link the Stream page keeps after the quick path: the same tips.
         let link = QuickPathHelp.cantSeeGame()
-        XCTAssertEqual(link.title, "Не видите игру?")
+        XCTAssertEqual(link.title, "Can't see the game?")
         XCTAssertEqual(link.tips, picture.help?.tips)
         XCTAssertEqual(link.options, [])
-        XCTAssertEqual(QuickPathPresentation.closeTitle, "Закрыть подсказки")
+        XCTAssertEqual(QuickPathPresentation.closeTitle, "Close the Hints")
+
+        // The same steps in another language: every text is translated, none stays English.
+        func everyText() throws -> [String] {
+            let steps: [QuickPathPresentation] = [
+                try XCTUnwrap(tour(connection: .wifi).presentation(in: onStream)),
+                try XCTUnwrap(tour(connection: .wired).presentation(in: onStream)),
+                try XCTUnwrap(tour(.done).presentation(in: onStream)),
+                try XCTUnwrap(tour(.done, .session(.starting)).presentation(in: onStream)),
+                try XCTUnwrap(tour(connection: .wired, .done, .session(.starting)).presentation(in: onStream)),
+                try XCTUnwrap(tour(.done, .session(.starting), .session(.live)).presentation(in: onStream)),
+            ]
+            var texts: [String] = []
+            for step in steps {
+                texts += [step.label, step.text]
+                texts += step.buttons.map(step.title(of:))
+                texts += step.help?.tips ?? []
+                texts += step.help?.options.map(step.title(of:)) ?? []
+            }
+            texts += [QuickPathHelp.cantSeeGame().title, QuickPathPresentation.closeTitle]
+            return texts
+        }
+        let english = try everyText()
+        L10n.language = .ru
+        let translated = try everyText()
+        XCTAssertEqual(translated.count, english.count)
+        for (text, original) in zip(translated, english) {
+            XCTAssertNotEqual(text, original)
+        }
     }
 
     /// The connection can be changed while the tour is open, for example
@@ -740,7 +769,7 @@ final class QuickPathTourTests: XCTestCase {
     func testTextsFollowTheConnectionPlayLaunchesWithNow() throws {
         let previous = L10n.language
         defer { L10n.language = previous }
-        L10n.language = .ru
+        L10n.language = .en
         func shown(_ tour: QuickPathTour, now connection: StreamConnectionMode?) throws -> QuickPathPresentation {
             try XCTUnwrap(tour.presentation(in: QuickPathEnvironment(
                 section: .stream, pageSheetOpen: false, connection: connection)))
@@ -748,28 +777,28 @@ final class QuickPathTourTests: XCTestCase {
 
         // Started over Wi-Fi, Play launches over USB now.
         let usbOrder = try shown(tour(connection: .wifi), now: .wired)
-        XCTAssertEqual(usbOrder.label, "Порядок запуска · USB-кабель")
-        XCTAssertEqual(usbOrder.text, "Подключите кабель. ALVR откроется сам после «Играть». "
-            + "Шлем должен быть разблокирован.")
+        XCTAssertEqual(usbOrder.label, "Launch order · USB Cable")
+        XCTAssertEqual(usbOrder.text, "Connect the cable. ALVR opens by itself after “Play”. "
+            + "The headset must be unlocked.")
         let usbWait = try shown(tour(connection: .wifi, .done, .session(.starting)), now: .wired)
-        XCTAssertEqual(usbWait.text, "Подождите «В ЭФИРЕ». Если открылось окно Steam — войдите.")
+        XCTAssertEqual(usbWait.text, "Wait for “LIVE”. If a Steam window opens, sign in.")
         XCTAssertEqual(usbWait.help?.tips, [
-            "Наденьте шлем и разблокируйте его.",
-            "Если открылось окно Steam — войдите.",
+            "Put on the headset and unlock it.",
+            "If a Steam window opened, sign in.",
         ])
 
         // The reverse.
         let wifiOrder = try shown(tour(connection: .wired), now: .wifi)
-        XCTAssertEqual(wifiOrder.label, "Порядок запуска · \(L10n.string(.connectionWiFi))")
-        XCTAssertEqual(wifiOrder.text, "Откройте ALVR в шлеме → снимите шлем → «Играть» → "
-            + "в первый раз «Разрешить» → наденьте шлем.")
+        XCTAssertEqual(wifiOrder.label, "Launch order · \(L10n.string(.connectionWiFi))")
+        XCTAssertEqual(wifiOrder.text, "Open ALVR in the headset → take the headset off → “Play” → "
+            + "the first time, “Allow” → put the headset on.")
         let wifiWait = try shown(tour(connection: .wired, .done, .session(.starting)), now: .wifi)
-        XCTAssertEqual(wifiWait.text, "Подождите «В ЭФИРЕ». Если Mac спросит «Разрешить подключение …?» — "
-            + "нажмите «Разрешить». Если открылось окно Steam — войдите.")
+        XCTAssertEqual(wifiWait.text, "Wait for “LIVE”. If your Mac asks “Allow … to connect?”, "
+            + "click “Allow”. If a Steam window opens, sign in.")
         XCTAssertEqual(wifiWait.help?.tips, [
-            "Проверьте, что в шлеме открыт ALVR.",
-            "Если Mac спросил «Разрешить подключение …?» — нажмите «Разрешить».",
-            "Если открылось окно Steam — войдите.",
+            "Check that ALVR is open in the headset.",
+            "If your Mac asks “Allow … to connect?”, click “Allow”.",
+            "If a Steam window opened, sign in.",
         ])
 
         for (started, now): (StreamConnectionMode, StreamConnectionMode) in [(.wifi, .wired), (.wired, .wifi)] {
@@ -806,19 +835,19 @@ final class QuickPathTourTests: XCTestCase {
     func testFailureShowsTheMatchingAdviceOrAGenericLine() throws {
         let previous = L10n.language
         defer { L10n.language = previous }
-        L10n.language = .ru
+        L10n.language = .en
 
         let known = try XCTUnwrap(tour(
             .done, .session(.starting), .session(.failed(L10n.string(.modelWaitingHeadset)))
         ).presentation(in: onStream))
         XCTAssertEqual(known.advice?.cause, .waitingForHeadset)
-        XCTAssertEqual(known.label, "Шлем не подключился")
-        XCTAssertEqual(known.text, "Откройте ALVR в шлеме, затем нажмите «Играть».")
+        XCTAssertEqual(known.label, "The headset did not connect")
+        XCTAssertEqual(known.text, "Open ALVR in the headset, then click “Play”.")
         // This advice's own action would start the quick path over, which
         // "Try again" does already. The strip's cross closes.
         XCTAssertEqual(known.buttons, [.retry])
         XCTAssertEqual(known.primaryButton, .retry)
-        XCTAssertEqual(known.buttons.map(known.title(of:)), ["Повторить"])
+        XCTAssertEqual(known.buttons.map(known.title(of:)), ["Try Again"])
         XCTAssertNil(known.target)
 
         // The advice follows the connection the tour was started with.
@@ -826,7 +855,7 @@ final class QuickPathTourTests: XCTestCase {
             connection: .wired,
             .done, .session(.starting), .session(.failed(L10n.string(.modelWaitingHeadset)))
         ).presentation(in: onStream))
-        XCTAssertEqual(usb.text, "Наденьте шлем и проверьте, что он разблокирован. Затем нажмите «Играть».")
+        XCTAssertEqual(usb.text, "Put on the headset and check that it is unlocked. Then click “Play”.")
         XCTAssertEqual(usb.buttons, [.retry])
         // When the app knows the connection Play launched with, the advice
         // follows that one, whichever the tour was started with.
@@ -845,8 +874,8 @@ final class QuickPathTourTests: XCTestCase {
             .done, .session(.starting), .session(.failed("The streamer exited with code 9"))
         ).presentation(in: onStream))
         XCTAssertNil(unknown.advice)
-        XCTAssertEqual(unknown.label, "Сбой сеанса")
-        XCTAssertEqual(unknown.text, "Запуск не удался. Причина написана в разделе «Трансляция».")
+        XCTAssertEqual(unknown.label, "Session failed")
+        XCTAssertEqual(unknown.text, "The launch failed. The reason is shown in “Stream”.")
         XCTAssertEqual(unknown.buttons, [.retry])
         XCTAssertEqual(unknown.primaryButton, .retry)
         XCTAssertNotEqual(unknown.id, known.id)
@@ -855,7 +884,7 @@ final class QuickPathTourTests: XCTestCase {
     func testFailureOffersTheAdvicesSectionFirstThenTryAgain() throws {
         let previous = L10n.language
         defer { L10n.language = previous }
-        L10n.language = .ru
+        L10n.language = .en
         let failed = tour(connection: .wired, .done, .session(.starting),
                           .session(.failed("Could not start wired ALVR session: \(AlvrWiredFailure.adbMissing)")))
 
@@ -863,7 +892,7 @@ final class QuickPathTourTests: XCTestCase {
         XCTAssertEqual(shown.advice?.cause, .adbMissing)
         XCTAssertEqual(shown.buttons, [.open(.headset), .retry])
         XCTAssertEqual(shown.primaryButton, .open(.headset))
-        XCTAssertEqual(shown.buttons.map(shown.title(of:)), ["Открыть «Шлем»", "Повторить"])
+        XCTAssertEqual(shown.buttons.map(shown.title(of:)), ["Open “Headset”", "Try Again"])
         XCTAssertNil(shown.help)
         XCTAssertEqual(shown.text, LaunchFailureAdvice(
             cause: .adbMissing, context: LaunchFailureContext(connection: .wired)).text)
@@ -887,7 +916,7 @@ final class QuickPathTourTests: XCTestCase {
             section: .stream, pageSheetOpen: false, gameWithOwnSettings: "Blood Trail")))
         XCTAssertEqual(own.advice?.context,
                        LaunchFailureContext(connection: .wired, gameWithOwnSettings: "Blood Trail"))
-        XCTAssertTrue(own.text.contains("«Настройки трансляции для Blood Trail…»"))
+        XCTAssertTrue(own.text.contains("“Stream Settings for Blood Trail…”"))
         XCTAssertNotEqual(own.text, shown.text)
 
         // Steam: its own section.
@@ -895,7 +924,7 @@ final class QuickPathTourTests: XCTestCase {
             .done, .session(.starting), .session(.failed(L10n.string(.modelSteamNotSignedIn)))
         ).presentation(in: onStream))
         XCTAssertEqual(steam.buttons, [.open(.steam), .retry])
-        XCTAssertEqual(steam.title(of: .open(.steam)), "Открыть «Steam»")
+        XCTAssertEqual(steam.title(of: .open(.steam)), "Open “Steam”")
     }
 
     /// A hint names a control by the control's own text, in every language.
