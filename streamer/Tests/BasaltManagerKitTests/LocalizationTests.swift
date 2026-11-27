@@ -250,7 +250,7 @@ final class LocalizationTests: XCTestCase {
         XCTAssertEqual(L10n.plural(.libraryGameCount, 0), "0 games")
         XCTAssertEqual(L10n.plural(.libraryGameCount, 1), "1 game")
         XCTAssertEqual(L10n.plural(.libraryGameCount, 2), "2 games")
-        // Russian and Ukrainian: 1 and 21 take the "one" form, 2 and 22 "few", 5 and 11 "many".
+        // Three forms: 1 and 21 take the "one" form, 2 and 22 "few", 5 and 11 "many".
         let categories: [(Int, PluralCategory)] = [
             (1, .one), (2, .few), (5, .many), (11, .many), (21, .one), (22, .few)
         ]
