@@ -22,7 +22,7 @@
   <img alt="Wine 11.10" src="https://img.shields.io/badge/Wine-11.10-6e7681?labelColor=1b1b1f">
   <img alt="DXMT 0.80 fork" src="https://img.shields.io/badge/DXMT-0.80%20fork-6e7681?labelColor=1b1b1f">
   <img alt="ALVR client 20.14.1" src="https://img.shields.io/badge/ALVR%20client-20.14.1-6e7681?labelColor=1b1b1f">
-  <a href="https://www.virustotal.com/gui/file/6756de1ba32f683fa3badcb989b780996e49c25f4c633129f51f146c25f6e0fc"><img alt="VirusTotal: no security vendor flagged the 0.2.2 DMG" src="https://img.shields.io/badge/VirusTotal-clean-2ea44f?labelColor=1b1b1f"></a>
+  <a href="https://www.virustotal.com/gui/file/1da375d33511d213dd290f6f663b6a9ad32fa441f2bbd7af9e53d7c5a7e0d744"><img alt="VirusTotal: no security vendor flagged the 0.2.3 DMG" src="https://img.shields.io/badge/VirusTotal-clean-2ea44f?labelColor=1b1b1f"></a>
   <a href="CONTRIBUTING.md"><img alt="Pull requests welcome" src="https://img.shields.io/badge/PRs-welcome-2ea44f?labelColor=1b1b1f"></a>
 </p>
 
@@ -110,7 +110,7 @@ VR does not promise stable operation on them. Other games may work but are not v
 
 1. Download `TrailBridge-VR-<version>-macos-arm64.dmg` from
    [Releases](https://github.com/abgitdev/TrailBridge-VR/releases/latest). Each release lists
-   the file's SHA-256 and a VirusTotal report ([0.2.2](https://www.virustotal.com/gui/file/6756de1ba32f683fa3badcb989b780996e49c25f4c633129f51f146c25f6e0fc): no security vendor flagged it).
+   the file's SHA-256 and a VirusTotal report ([0.2.3](https://www.virustotal.com/gui/file/1da375d33511d213dd290f6f663b6a9ad32fa441f2bbd7af9e53d7c5a7e0d744): no security vendor flagged it).
 2. Optionally check the file: `shasum -a 256 ~/Downloads/TrailBridge-VR-*.dmg` must print the
    published SHA-256.
 3. Open the DMG and drag **TrailBridge VR** to **Applications**.
