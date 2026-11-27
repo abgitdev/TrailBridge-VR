@@ -39,14 +39,18 @@ public struct KnownErrorHint: Sendable {
     /// The places in the app the hint sends the person to, by the names the
     /// app shows for them, in the order of the hint's placeholders.
     public let places: [L10nKey]
+    /// Whether only lines from before the app stops the session count: the
+    /// stop takes the session's Wine down, which Wine can report as a crash.
+    public let untilStopped: Bool
 
     /// The patterns are literals that the tests read, so they are compiled
     /// once and a mistake in one shows there.
-    init(_ pattern: String, reads: Reads, when condition: Condition? = nil, key: L10nKey,
-         places: [L10nKey] = []) {
+    init(_ pattern: String, reads: Reads, when condition: Condition? = nil, untilStopped: Bool = false,
+         key: L10nKey, places: [L10nKey] = []) {
         self.pattern = try! NSRegularExpression(pattern: pattern)
         self.reads = reads
         self.condition = condition
+        self.untilStopped = untilStopped
         self.key = key
         self.places = places
     }
@@ -90,7 +94,9 @@ public struct KnownErrorHint: Sendable {
             reads: .game, when: .runtimeNeverConnected, key: .modelHintOpenXR),
         // Wine's server prints this as it dies (server/signal.c), as a line
         // of its own in the output of the Wine process that started it.
-        KnownErrorHint("^wineserver crashed", reads: .wine, key: .modelHintWineCrashed,
+        // Stopping a session takes the server down too: Steam's Wine process
+        // then prints it as well, so only a line from before the stop counts.
+        KnownErrorHint("^wineserver crashed", reads: .wine, untilStopped: true, key: .modelHintWineCrashed,
                        places: [.menuHelp, .menuDiagnostics]),
     ]
 }
@@ -117,6 +123,8 @@ public struct KnownErrorScanner: Sendable {
         let dataRoot: URL
         var gStreamer: GStreamerInstallation?
         var runtimeConnected = false
+        /// When the app stopped the session and began to shut its Wine down.
+        var stoppedAt: ContinuousClock.Instant?
         /// The rules a line has matched, by their index in `rules`; their
         /// conditions are read when the hints are given.
         var matched = Set<Int>()
@@ -170,10 +178,19 @@ public struct KnownErrorScanner: Sendable {
         sessions[session]?.gStreamer = gStreamer
     }
 
+    /// The app stops `session` and shuts its Wine down: lines its pipes got
+    /// from `instant` on count only for rules that read past the stop.
+    public mutating func noteStop(of session: UUID, at instant: ContinuousClock.Instant = .now) {
+        guard sessions[session]?.stoppedAt == nil else { return }
+        sessions[session]?.stoppedAt = instant
+    }
+
     /// Reads lines as the session log got them (`SessionConsole.append`),
     /// with `source` the pipe they came from: nil, or one no session
-    /// attached, for the app's own lines.
-    public mutating func read(_ lines: [String], from source: ObjectIdentifier?) {
+    /// attached, for the app's own lines. `receivedAt` is when the pipe got
+    /// them, which can be before the app reads them.
+    public mutating func read(_ lines: [String], from source: ObjectIdentifier?,
+                              receivedAt: ContinuousClock.Instant = .now) {
         guard let source, let (session, printer) = sources[source], var state = sessions[session] else { return }
         for line in lines {
             let message = line.hasPrefix(printer.rawValue) ? line.dropFirst(printer.rawValue.count) : Substring(line)
@@ -183,9 +200,9 @@ public struct KnownErrorScanner: Sendable {
             case .streamer:
                 if message.hasPrefix(RuntimeLink.connectedLogPrefix) { state.runtimeConnected = true }
             case .steam:
-                match(message, reading: [.wine], into: &state)
+                match(message, reading: [.wine], receivedAt: receivedAt, into: &state)
             case .game:
-                match(message, reading: [.game, .wine], into: &state)
+                match(message, reading: [.game, .wine], receivedAt: receivedAt, into: &state)
             }
         }
         sessions[session] = state
@@ -195,7 +212,7 @@ public struct KnownErrorScanner: Sendable {
     public mutating func read(gameLog excerpt: GameLogExcerpt?, of session: UUID) {
         guard let excerpt, var state = sessions[session] else { return }
         for line in Self.contentLines(of: excerpt) {
-            match(line, reading: [.game], into: &state)
+            match(line, reading: [.game], receivedAt: nil, into: &state)
         }
         sessions[session] = state
     }
@@ -224,11 +241,15 @@ public struct KnownErrorScanner: Sendable {
 
     /// GStreamer's known harmless warnings never match, whatever they say:
     /// once it is installed, Wine prints them in every session.
-    private func match(_ line: Substring, reading reads: Set<KnownErrorHint.Reads>, into state: inout Session) {
+    /// A line of unknown time counts as one from after the stop.
+    private func match(_ line: Substring, reading reads: Set<KnownErrorHint.Reads>,
+                       receivedAt: ContinuousClock.Instant?, into state: inout Session) {
+        let afterStop = state.stoppedAt.map { stop in receivedAt.map { $0 >= stop } ?? true } ?? false
         let text = String(line)
         let range = NSRange(text.startIndex..., in: text)
         for (index, rule) in rules.enumerated()
         where reads.contains(rule.reads) && !state.matched.contains(index)
+            && !(rule.untilStopped && afterStop)
             && rule.pattern.firstMatch(in: text, range: range) != nil
             && !SessionConsole.isKnownHarmlessNoise(text) {
             state.matched.insert(index)

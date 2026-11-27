@@ -2,6 +2,11 @@
 
 All notable changes to TrailBridge VR are documented here.
 
+## Unreleased
+
+- Stopping a session no longer gives the hint that Wine crashed. The stop takes Wine's server down,
+  and Steam's Wine process reported that as a crash; only a report from before the stop counts now.
+
 ## 0.2.2 — 2026-11-25
 
 - Every Steam game starts in the headset, not only the verified ones. A profile made by Add Steam

@@ -1754,6 +1754,8 @@ final class BasaltAppModel: ObservableObject {
         // Its processes' output still counts for its hints until they are given.
         let scannedSession = scannedSessionID
         scannedSessionID = nil
+        // As the shutdown below takes its Wine down, Wine may say its server crashed.
+        if let scannedSession { knownErrors.noteStop(of: scannedSession) }
         gameProcess = nil
         runningGame = nil
         steamProcess = nil
@@ -2127,7 +2129,9 @@ final class BasaltAppModel: ObservableObject {
             if let session = scannedSessionID, let printer = KnownErrorScanner.Printer(rawValue: prefix) {
                 knownErrors.attach(source, printer: printer, to: session)
             }
-            let (chunks, continuation) = AsyncStream.makeStream(of: Data.self)
+            // When the pipe got each chunk: Stop's cutoff for the hints.
+            let (chunks, continuation) = AsyncStream.makeStream(
+                of: (data: Data, receivedAt: ContinuousClock.Instant).self)
             pipe.fileHandleForReading.readabilityHandler = { handle in
                 let data = handle.availableData
                 guard !data.isEmpty else {
@@ -2135,14 +2139,16 @@ final class BasaltAppModel: ObservableObject {
                     continuation.finish()
                     return
                 }
-                continuation.yield(data)
+                continuation.yield((data, .now))
             }
             Task { @MainActor [weak self] in
-                for await data in chunks {
-                    self?.appendLog(String(decoding: data, as: UTF8.self),
-                                    from: source, prefix: prefix)
+                var lastReceived = ContinuousClock.now
+                for await chunk in chunks {
+                    lastReceived = chunk.receivedAt
+                    self?.appendLog(String(decoding: chunk.data, as: UTF8.self),
+                                    from: source, prefix: prefix, receivedAt: chunk.receivedAt)
                 }
-                self?.finishLog(from: source, prefix: prefix)
+                self?.finishLog(from: source, prefix: prefix, receivedAt: lastReceived)
             }
         }
     }
@@ -2851,16 +2857,16 @@ final class BasaltAppModel: ObservableObject {
     }
 
     private func appendLog(_ value: String, from source: ObjectIdentifier? = nil,
-                           prefix: String = "") {
+                           prefix: String = "", receivedAt: ContinuousClock.Instant = .now) {
         let lines = console.append(value, from: source, prefix: prefix)
         recordLines(lines)
-        knownErrors.read(lines, from: source)
+        knownErrors.read(lines, from: source, receivedAt: receivedAt)
     }
 
-    private func finishLog(from source: ObjectIdentifier, prefix: String) {
+    private func finishLog(from source: ObjectIdentifier, prefix: String, receivedAt: ContinuousClock.Instant) {
         let lines = console.finish(source, prefix: prefix)
         recordLines(lines)
-        knownErrors.read(lines, from: source)
+        knownErrors.read(lines, from: source, receivedAt: receivedAt)
         knownErrors.close(source)
     }
 

@@ -164,6 +164,29 @@ final class KnownErrorHintTests: XCTestCase {
         XCTAssertEqual(quoted.hints(gameLog: excerpt(wineserverCrash)), [])
     }
 
+    func testWineTheAppStopsDidNotCrash() {
+        let stop = ContinuousClock.now
+        let before = stop.advanced(by: .milliseconds(-1))
+        let after = stop.advanced(by: .milliseconds(1))
+        // Stop takes Wine's server down, and Steam's Wine process says so.
+        for printer in [KnownErrorScanner.Printer.game, .steam] {
+            let stopped = Recording()
+            stopped.stop(at: stop)
+            stopped.print("\(wineserverCrash)\n", by: printer, at: after)
+            XCTAssertEqual(stopped.hints(), [], "\(printer)")
+        }
+        // A crash before the stop is still one, also when the app reads it after the stop.
+        let crashed = Recording()
+        crashed.stop(at: stop)
+        crashed.print("\(wineserverCrash)\n", by: .steam, at: before)
+        XCTAssertEqual(crashed.hints(), [.modelHintWineCrashed])
+        // The other rules read on.
+        let video = Recording(gStreamer: .missing)
+        video.stop(at: stop)
+        video.print(videoError + "\n", by: .game, at: after)
+        XCTAssertEqual(video.hints(), [.modelHintVideoWithoutGStreamer])
+    }
+
     // MARK: - What is read
 
     func testTheAppsOwnLinesAreNeverRead() {
@@ -361,9 +384,11 @@ private final class Recording {
         if let gStreamer { scanner.gameStarted(in: session, gStreamer: gStreamer) }
     }
 
-    func print(_ output: String, by printer: KnownErrorScanner.Printer) {
+    /// `instant` is when the pipe got the output.
+    func print(_ output: String, by printer: KnownErrorScanner.Printer, at instant: ContinuousClock.Instant = .now) {
         let source = ObjectIdentifier(pipes[printer]!)
-        scanner.read(console.append(output, from: source, prefix: printer.rawValue), from: source)
+        scanner.read(console.append(output, from: source, prefix: printer.rawValue), from: source,
+                     receivedAt: instant)
     }
 
     func close(_ printer: KnownErrorScanner.Printer) {
@@ -374,6 +399,11 @@ private final class Recording {
 
     func appLine(_ line: String) {
         scanner.read(console.append(line.hasSuffix("\n") ? line : line + "\n"), from: nil)
+    }
+
+    /// The app stops the session, as `stop()` does before it shuts Wine down.
+    func stop(at instant: ContinuousClock.Instant = .now) {
+        scanner.noteStop(of: session, at: instant)
     }
 
     /// The session's hints once its game's own log has been read.
