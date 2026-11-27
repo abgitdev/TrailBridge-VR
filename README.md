@@ -17,7 +17,7 @@
   <img alt="10 languages" src="https://img.shields.io/badge/languages-10-8957e5?labelColor=1b1b1f">
 </p>
 <p align="center">
-  <a href="#tested-setup"><img alt="Verified games: 5" src="https://img.shields.io/badge/verified%20games-5-ff5a1f?logo=steam&logoColor=white&labelColor=1b1b1f"></a>
+  <a href="#tested-setup"><img alt="Verified games: 8" src="https://img.shields.io/badge/verified%20games-8-ff5a1f?logo=steam&logoColor=white&labelColor=1b1b1f"></a>
   <img alt="OpenXR runtime" src="https://img.shields.io/badge/OpenXR-runtime-6e7681?labelColor=1b1b1f">
   <img alt="Wine 11.10" src="https://img.shields.io/badge/Wine-11.10-6e7681?labelColor=1b1b1f">
   <img alt="DXMT 0.80 fork" src="https://img.shields.io/badge/DXMT-0.80%20fork-6e7681?labelColor=1b1b1f">
@@ -100,6 +100,8 @@ on [BasaltVR](https://github.com/frenchbaguetteman/BasaltVR).
 | BONELAB | The game's own OpenXR | |
 | Blade & Sorcery | OpenComposite (OpenVR) | |
 | Electrician Simulator VR | The game's own OpenXR | Its intro video needs GStreamer, which the Setup page checks for. |
+| Tactical Assault VR | The game's own OpenXR | |
+| The Elder Scrolls V: Skyrim VR | OpenComposite (OpenVR) | |
 
 Not tested: Macs with 8 GB or 16 GB of memory, other Mac models and other headsets. TrailBridge
 VR does not promise stable operation on them. Other games may work but are not verified.

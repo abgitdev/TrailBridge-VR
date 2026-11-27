@@ -442,6 +442,8 @@ final class StringsRU: LocalizationTable {
         .wizardVTOLNote: "Проверена на Mac mini M4 и Quest 3: полёт с ботами, оба глаза. TrailBridge сам меняет настройку отрисовки игры, без неё правый глаз чёрный.",
         .wizardBonelabNote: "Проверена на Mac mini M4 и Quest 3: запуск и игра через собственный OpenXR игры. Проверялась короткими сеансами.",
         .wizardBladeSorceryNote: "Проверена на Mac mini M4 и Quest 3: меню и игра. Проверялась короткими сеансами.",
+        .wizardTacticalAssaultNote: "Проверена на Mac mini M4 и Quest 3: запуск и 12-минутный сеанс через собственный OpenXR игры.",
+        .wizardSkyrimNote: "Проверена на Mac mini M4 и Quest 3: запуск и игра через OpenComposite, стабильные 72 fps. Проверялась в коротком сеансе.",
         .wizardOtherNote: "В TrailBridge эта игра не проверялась. Может не запуститься или работать с ошибками.",
         .wizardActivityInstaller: "Откроется установщик Windows. Пройдите его шаги и сами примите соглашение Steam.",
         .wizardActivityUpdating: "Ждём завершения обновления Steam. После проверки откроем окно входа.",

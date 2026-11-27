@@ -291,7 +291,8 @@ final class GameFolderScanTests: XCTestCase {
                        "beat-saber-3")
         // The verified games' environments are reserved even before they exist.
         XCTAssertEqual(GameFolderScan.reservedEnvironmentNames,
-                       ["brutalistick-vr", "blood-trail", "vtol-vr", "bonelab", "blade-sorcery"])
+                       ["brutalistick-vr", "blood-trail", "vtol-vr", "bonelab", "blade-sorcery",
+                        "tactical-assault-vr", "skyrim-vr"])
         XCTAssertEqual(GameFolderScan.environmentName(for: "Blood Trail", taken: []), "blood-trail-2")
         XCTAssertEqual(GameFolderScan.environmentName(for: "BRUTALISTICK VR", taken: ["brutalistick-vr-2"]),
                        "brutalistick-vr-3")

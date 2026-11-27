@@ -107,6 +107,8 @@ private enum SteamWizardPresentation {
         case "667970": L(.wizardVTOLNote)
         case "1592190": L(.wizardBonelabNote)
         case "629730": L(.wizardBladeSorceryNote)
+        case "2314160": L(.wizardTacticalAssaultNote)
+        case "611670": L(.wizardSkyrimNote)
         default: L(.wizardOtherNote)
         }
     }

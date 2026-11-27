@@ -388,11 +388,12 @@ final class SteamGameWizardTests: XCTestCase {
 
     func testCatalogContainsExactlyTwoVerifiedGamesAndUnverifiedOther() {
         XCTAssertEqual(SteamCatalogGame.verified.map(\.appID),
-                       ["2669380", "1032430", "667970", "1592190", "629730"])
-        XCTAssertEqual(SteamCatalogGame.all.filter(\.isVerified).count, 5)
-        // BONELAB starts its own OpenXR loader; the others need OpenComposite.
-        XCTAssertEqual(SteamCatalogGame.verified.filter { !$0.needsOpenVR }.map(\.name), ["BONELAB"])
-        XCTAssertEqual(Set(SteamCatalogGame.verified.compactMap(\.environmentName)).count, 5)
+                       ["2669380", "1032430", "667970", "1592190", "629730", "2314160", "611670"])
+        XCTAssertEqual(SteamCatalogGame.all.filter(\.isVerified).count, 7)
+        // BONELAB and Tactical Assault VR start their own OpenXR loader; the others need OpenComposite.
+        XCTAssertEqual(SteamCatalogGame.verified.filter { !$0.needsOpenVR }.map(\.name),
+                       ["BONELAB", "Tactical Assault VR"])
+        XCTAssertEqual(Set(SteamCatalogGame.verified.compactMap(\.environmentName)).count, 7)
         XCTAssertTrue(SteamCatalogGame.verified.allSatisfy {
             $0.verifiedIn == VerifiedMonth(year: 2026, month: 11)
         })
@@ -423,11 +424,21 @@ final class SteamGameWizardTests: XCTestCase {
         XCTAssertTrue(SteamCatalogGame.isVerified(profile: profile(.steam, ["SteamAppId": "2669380"])))
         XCTAssertTrue(SteamCatalogGame.isVerified(profile: profile(.steam, ["SteamGameId": "1032430"])))
 
-        // Other Steam games, the wizard's -applaunch profiles, and every
-        // other source are not verified, whatever their environment says.
+        // Add Steam Game starts a game it knows no executable of through
+        // steam.exe -applaunch, which the launch resolves to the game.
+        XCTAssertTrue(SteamCatalogGame.isVerified(profile: profile(.steam, [:], arguments: ["-applaunch", "611670"])))
+        XCTAssertTrue(SteamCatalogGame.isVerified(
+            profile: profile(.steam, [:], arguments: ["-silent", "-applaunch", "2314160", "-vrmode"])))
+
+        // Other Steam games and every other source are not verified,
+        // whatever their environment or arguments say.
         XCTAssertFalse(SteamCatalogGame.isVerified(profile: profile(.steam, ["SteamAppId": "620980"])))
+        XCTAssertFalse(SteamCatalogGame.isVerified(profile: profile(.steam, [:], arguments: ["-applaunch", "620980"])))
+        // The launch starts the -applaunch game and sets both variables to it.
         XCTAssertFalse(SteamCatalogGame.isVerified(
-            profile: profile(.steam, [:], arguments: ["-applaunch", "2669380"])))
+            profile: profile(.steam, ["SteamAppId": "611670"], arguments: ["-applaunch", "620980"])))
+        XCTAssertFalse(SteamCatalogGame.isVerified(profile: profile(.steam, [:], arguments: ["611670", "-applaunch"])))
+        XCTAssertFalse(SteamCatalogGame.isVerified(profile: profile(.direct, [:], arguments: ["-applaunch", "611670"])))
         XCTAssertFalse(SteamCatalogGame.isVerified(profile: profile(.steam, ["SteamAppId": " 2669380"])))
         XCTAssertFalse(SteamCatalogGame.isVerified(profile: profile(.direct, [:])))
         XCTAssertFalse(SteamCatalogGame.isVerified(profile: profile(.direct, ["SteamAppId": "2669380"])))

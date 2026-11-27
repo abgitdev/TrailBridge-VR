@@ -4,6 +4,10 @@ All notable changes to TrailBridge VR are documented here.
 
 ## Unreleased
 
+- Add Steam Game lists Tactical Assault VR and The Elder Scrolls V: Skyrim VR as verified in the
+  headset, and the README lists them among the tested games.
+- The Library marks a verified game as verified also when its profile starts it through
+  `steam.exe -applaunch`, as Add Steam Game saves games it knows no executable of.
 - Stopping a session no longer gives the hint that Wine crashed. The stop takes Wine's server down,
   and Steam's Wine process reported that as a crash; only a report from before the stop counts now.
 

@@ -472,6 +472,8 @@ public enum L10nKey: String, CaseIterable, Sendable {
     case wizardVTOLNote
     case wizardBonelabNote
     case wizardBladeSorceryNote
+    case wizardTacticalAssaultNote
+    case wizardSkyrimNote
     case wizardOtherNote
     case wizardActivityInstaller
     case wizardActivityUpdating

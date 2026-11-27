@@ -442,6 +442,8 @@ final class StringsKO: LocalizationTable {
         .wizardVTOLNote: "Mac mini M4와 Quest 3에서 확인됨: 봇과 비행, 양쪽 눈 표시. TrailBridge가 게임의 렌더링 설정을 직접 바꿔요. 바꾸지 않으면 오른쪽 눈이 검게 보여요.",
         .wizardBonelabNote: "Mac mini M4와 Quest 3에서 확인됨: 게임 자체 OpenXR로 실행 및 플레이. 짧은 세션으로 확인했어요.",
         .wizardBladeSorceryNote: "Mac mini M4와 Quest 3에서 확인됨: 메뉴와 플레이. 짧은 세션으로 확인했어요.",
+        .wizardTacticalAssaultNote: "Mac mini M4와 Quest 3에서 확인됨: 게임 자체 OpenXR로 실행해 12분 동안 플레이했어요.",
+        .wizardSkyrimNote: "Mac mini M4와 Quest 3에서 확인됨: OpenComposite로 실행 및 플레이, 72 fps로 안정적이에요. 짧은 세션으로 확인했어요.",
         .wizardOtherNote: "이 게임은 TrailBridge에서 테스트되지 않았어요. 실행되지 않거나 문제가 생길 수 있어요.",
         .wizardActivityInstaller: "Windows 설치 프로그램이 열려요. 안내에 따라 진행하고 Steam 약관에 직접 동의하세요.",
         .wizardActivityUpdating: "Steam 업데이트가 끝나기를 기다리고 있어요. 확인 후 로그인 창이 열려요.",

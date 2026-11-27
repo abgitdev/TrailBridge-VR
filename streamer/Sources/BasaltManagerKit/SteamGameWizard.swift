@@ -55,6 +55,11 @@ public struct SteamCatalogGame: Identifiable, Equatable, Sendable {
               environmentName: "bonelab", needsOpenVR: false, verifiedIn: november2026),
         .init(id: "629730", name: "Blade & Sorcery", appID: "629730",
               environmentName: "blade-sorcery", needsOpenVR: true, verifiedIn: november2026),
+        // Tactical Assault VR runs its own OpenXR loader too.
+        .init(id: "2314160", name: "Tactical Assault VR", appID: "2314160",
+              environmentName: "tactical-assault-vr", needsOpenVR: false, verifiedIn: november2026),
+        .init(id: "611670", name: "The Elder Scrolls V: Skyrim VR", appID: "611670",
+              environmentName: "skyrim-vr", needsOpenVR: true, verifiedIn: november2026),
     ]
     public static let other = Self(id: "other", name: "Another game", appID: nil,
         environmentName: nil, needsOpenVR: false)
@@ -84,11 +89,18 @@ extension SteamCatalogGame {
 
     /// Whether a launch profile starts one of the games verified in a
     /// headset: a Steam profile whose SteamAppId or SteamGameId is in
-    /// `verified`. Every other profile is not verified, games added from a
-    /// folder among them, so the Library can say so on their tiles.
+    /// `verified`, or that starts it through `steam.exe -applaunch`, as Add
+    /// Steam Game saves a game it knows no executable of. The launch sets
+    /// both variables to that app ID, so `-applaunch` wins over them. Every
+    /// other profile is not verified, games added from a folder among them,
+    /// so the Library can say so on their tiles.
     public static func isVerified(profile: LaunchProfile) -> Bool {
         guard profile.source == .steam else { return false }
         let verifiedIDs = Set(verified.compactMap(\.appID))
+        if let index = profile.arguments.firstIndex(of: "-applaunch"),
+           profile.arguments.indices.contains(index + 1) {
+            return verifiedIDs.contains(profile.arguments[index + 1])
+        }
         return ["SteamAppId", "SteamGameId"].contains { key in
             profile.environment[key].map { verifiedIDs.contains($0) } ?? false
         }

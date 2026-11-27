@@ -442,6 +442,8 @@ final class StringsJA: LocalizationTable {
         .wizardVTOLNote: "Mac mini M4とQuest 3で確認済み：ボットとの飛行、両目表示。TrailBridgeがゲームの描画設定を自動で変更します。変更しないと右目が黒くなります。",
         .wizardBonelabNote: "Mac mini M4とQuest 3で確認済み：ゲーム自身のOpenXRで起動・プレイ。短いセッションで確認。",
         .wizardBladeSorceryNote: "Mac mini M4とQuest 3で確認済み：メニューとプレイ。短いセッションで確認。",
+        .wizardTacticalAssaultNote: "Mac mini M4とQuest 3で確認済み：ゲーム自身のOpenXRで起動し、12分間プレイ。",
+        .wizardSkyrimNote: "Mac mini M4とQuest 3で確認済み：OpenCompositeで起動・プレイ、72 fpsで安定。短いセッションで確認。",
         .wizardOtherNote: "このゲームはTrailBridgeで未検証です。起動しなかったり、問題が発生する場合があります。",
         .wizardActivityInstaller: "Windowsインストーラが開きます。手順に従い、Steamの契約にご自身で同意してください。",
         .wizardActivityUpdating: "Steamの更新完了を待機しています。検証後にログイン画面が開きます。",
